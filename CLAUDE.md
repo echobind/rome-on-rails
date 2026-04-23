@@ -63,7 +63,10 @@ rome-on-rails/
 
 - **Two Railway services:** Hermes (worker, no public domain) + Tailscale (subnet router)
 - **Access pattern:** Tailscale subnet router bridges tailnet to Railway private network
-- **Version pinning:** `pip install "hermes-agent==<version>"` in Dockerfile
+- **Version pinning:** `FROM nousresearch/hermes-agent:<version>` in Dockerfile (official Docker Hub image, date-based tags like `v2026.4.16`)
+- **Volume:** Railway volume mounts at `/opt/data` (upstream default — no env overrides)
+- **Entrypoint:** `entrypoint.sh` is a thin wrapper that validates env vars then `exec`s upstream `/opt/hermes/docker/entrypoint.sh`
+- **Start command:** `hermes gateway run` — serves Slack integration and dashboard on port 9119 in one process
 - **Secrets:** Railway environment variables only — never in the volume or repo
 - **No public URL:** Hermes deployed as worker type; Railway never assigns it a domain
 
@@ -71,4 +74,10 @@ Full rationale in `ARCHITECTURE.md`.
 
 ## Commands
 
-None yet — will be added when Dockerfile and entrypoint.sh exist and are testable.
+Local build and smoke-test (runs the image; will exit quickly without valid env vars):
+```bash
+docker build -t rome-on-rails:dev .
+docker run --rm -e HERMES_INFERENCE_PROVIDER=openrouter -e OPENROUTER_API_KEY=sk-... rome-on-rails:dev
+```
+
+On Railway the Dockerfile is built and deployed automatically on push to the tracked branch. No manual deploy command.
