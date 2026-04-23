@@ -89,6 +89,7 @@ The upstream Hermes image already declares these internally. Setting them in Rai
 | `HERMES_HOME` | Upstream sets this to `/opt/data`. Overriding desyncs the container from the mounted Railway volume — the agent reads/writes in one place while the volume is mounted in another. |
 | `HOME` | Same reason — the upstream entrypoint uses `$HOME` in several places. Overriding from Railway can put Hermes state outside the volume, making it vanish on redeploy. |
 | `HERMES_VERSION` | Set automatically by the `Dockerfile` `ARG` → `ENV`. Setting it at runtime in Railway does not actually change the installed Hermes version — it just makes the startup banner lie. |
+| `GATEWAY_ALLOW_ALL_USERS` | Disables every per-platform allowlist at once (Slack, Telegram, Discord, etc.) and turns the agent into an open-access bot. Hermes surfaces this variable in a startup warning as the "enable open access" escape hatch, but setting it directly contradicts the access-control model in `ARCHITECTURE.md` and `HANDOFF.md` Risk 7. If you are tempted to set this because the bot is not responding, the correct fix is almost certainly to add specific user IDs to `SLACK_ALLOWED_USERS` (or the equivalent per-platform variable). Verified to exist on pinned version v2026.4.16 during the 2026-04-23 smoke test. |
 
 If you find yourself wanting to override one of these, the right answer is almost always to change the `Dockerfile` or the volume mount path, not to add a Railway env var.
 

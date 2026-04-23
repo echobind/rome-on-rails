@@ -171,7 +171,7 @@ Reach the Hermes web dashboard and CLI over Tailscale. This is a small, known gr
 Interact with Hermes by mentioning the bot or DMing it in Slack. They never touch Railway or Tailscale — all traffic flows through Slack's own infrastructure, and the Hermes container makes outbound WebSocket connections to Slack (Socket Mode). Slack-user access is bounded by:
 
 - **Slack workspace membership** — the outer ring. Anyone outside the workspace cannot reach the bot at all.
-- **`SLACK_ALLOWED_USERS`** — the inner ring. A comma-separated list of Slack member IDs, set as a Railway environment variable. This is the *only* per-user allowlist Hermes exposes for Slack, and it is **required**. A deploy where the bot appears online but does not respond is almost always a missing or incorrect `SLACK_ALLOWED_USERS`.
+- **`SLACK_ALLOWED_USERS`** — the inner ring. A comma-separated list of Slack member IDs, set as a Railway environment variable. This is the *only* per-user allowlist Hermes exposes for Slack; when unset, the gateway denies all messages (verified 2026-04-23, Hermes v2026.4.16 — see `HANDOFF.md` Risk 7). A deploy where the bot appears online but does not respond is almost always a missing or incorrect `SLACK_ALLOWED_USERS`. An unsafe master override exists (`GATEWAY_ALLOW_ALL_USERS=true`) that disables all allowlists gateway-wide; **do not set it** — listed in `docs/secrets-guide.md` under variables you must not set.
 
 **Implication for operators:** `SLACK_ALLOWED_USERS` must be set during first deploy and updated whenever team membership changes (e.g., offboarding). There is no Hermes-side UI for managing it. See Risk 7 in `HANDOFF.md`.
 
@@ -228,7 +228,7 @@ This section records significant architecture decisions, when they were made, an
 
 **Rationale:** Hermes ships a built-in allowlist for Slack; duplicating that logic in our template would create two sources of truth for "who can use the bot" and invites drift. Slack workspace membership is the outer ring; `SLACK_ALLOWED_USERS` is the inner ring. No extra ring is required for Echobind's threat model.
 
-**Known uncertainty:** The exact semantics of an unset or empty `SLACK_ALLOWED_USERS` are not independently verified for our pinned Hermes version — upstream Slack docs describe a fail-closed default ("deny all messages"), while feature requests on adjacent gateways (Telegram) suggest some gateways default open. We document the variable as "required for Slack to function at all" — a statement that stays correct under either default — and will verify empirically against our live instance during rollout. See Risk 7 in `HANDOFF.md`.
+**Verified behavior (2026-04-23, Hermes v2026.4.16):** On a real Railway smoke test against `echobind/rome-on-rails` branch `initial-dockerfile-and-docs`, the Hermes gateway emitted an explicit warning when no per-platform allowlist was configured and refused all unauthorized users (fail-closed, as the upstream Slack docs described). The warning also advertises `GATEWAY_ALLOW_ALL_USERS=true` as a gateway-wide opt-out — a master override we explicitly do not use. The exact warning text and full rationale for treating this as unsafe live in `HANDOFF.md` Risk 7.
 
 ---
 

@@ -66,7 +66,7 @@ Go to the [Tailscale admin keys page](https://login.tailscale.com/admin/settings
 |---|---|---|
 | Reusable | ✅ Enabled | So the subnet router can rejoin after restarts and redeploys without a human regenerating a key |
 | Ephemeral | ❌ Disabled | Ephemeral nodes are cleaned up automatically when offline — not what we want for an always-on service |
-| Pre-approved | ✅ Enabled (if your tailnet uses device approval) | Otherwise you need to manually approve the Railway node on first boot |
+| Pre-approved | ✅ Enabled — **but only if you actually see this toggle**. It only appears when your tailnet has **device approval** turned on in admin settings. If you don't see it, your tailnet doesn't require device approval and you can skip this row entirely — machines will auto-join. | Prevents the Railway node from sitting in "pending approval" state on first boot |
 | Tags | `tag:railway` (recommended) | Makes it possible to write Tailscale ACLs that target Railway nodes specifically |
 | Expiration | 90 days (default) or your org's standard | The key expiring just means you can't *re-create* nodes with it — existing nodes keep working. But rotate on schedule. |
 
