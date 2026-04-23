@@ -1,6 +1,6 @@
 # HANDOFF.md — rome-on-rails
 
-## Last updated: 2026-04-22
+## Last updated: 2026-04-23
 
 This document is for engineers taking over maintenance of rome-on-rails, or returning to it after an extended absence. It summarizes the architecture, flags known risks, and records recommendations that didn't fit neatly into the README or ARCHITECTURE docs.
 
@@ -33,10 +33,10 @@ Full details: [ARCHITECTURE.md](./ARCHITECTURE.md)
 
 ## Known Risks
 
-### Risk 1 — Hermes is a very new project (v0.x)
-Hermes was first released in February 2026. As of the initial rome-on-rails build (April 2026), it is at v0.10.0. The project moves fast — multiple releases per week — and API stability between minor versions is not guaranteed. **The pinned version in the Dockerfile must be reviewed before any upgrade.**
+### Risk 1 — Hermes is a fast-moving project with date-based versioning
+Hermes was first released in early 2026. As of the initial rome-on-rails build (2026-04-22), the pinned version is **v2026.4.16**. Hermes uses **date-based versioning** (`vYYYY.M.D`) rather than semver, so you cannot infer "major/minor/patch" from the version string — any two releases may contain breaking changes. The project moves fast (multiple releases per week), and the upstream changelog is the only reliable signal of what changed between pinned versions. **Review the changelog for every version between your current pin and the target before upgrading.**
 
-Mitigation: Version is pinned in the Dockerfile. Upgrades require a deliberate change and redeploy.
+Mitigation: Version is pinned via the base-image tag in the `Dockerfile` (`FROM nousresearch/hermes-agent:v2026.4.16`). Upgrades require a deliberate edit and redeploy.
 
 ### Risk 2 — The Tailscale auth key expires
 If the `TS_AUTHKEY` environment variable holds an expiring auth key (not a reusable one), the Tailscale service will fail to rejoin the tailnet after the key expires. When that happens, Hermes becomes unreachable even though it is still running.
@@ -54,9 +54,29 @@ The persistent volume contains session history, agent memory, and skill data. Ra
 Mitigation: This is acceptable for Echobind's current threat model. If this becomes a concern, the volume contents can be encrypted with a key stored as a Railway environment variable — but this adds significant complexity to the entrypoint script and is not implemented in v1.
 
 ### Risk 5 — Secrets in Railway env vars are visible to anyone with Railway project access
-Anyone with Railway access to the rome-on-rails project can view the environment variables, including `LLM_PROVIDER_API_KEY`, `SLACK_BOT_TOKEN`, etc.
+Anyone with Railway access to the rome-on-rails project can view the environment variables, including `OPENROUTER_API_KEY`, `SLACK_BOT_TOKEN`, etc.
 
 Mitigation: Limit Railway project access to engineers who need it. Use Railway's team roles to enforce this.
+
+### Risk 6 — Supply-chain dependency on `nousresearch/hermes-agent` on Docker Hub
+The Hermes service builds `FROM nousresearch/hermes-agent:<version>` — the official Nous Research image on Docker Hub. We rely on that image and tag remaining available, unmodified, and trustworthy.
+
+Failure modes this exposes us to:
+- **Tag yanked or removed:** A pinned version could become unpullable, blocking future Railway redeploys of the same version.
+- **Namespace compromise:** If the `nousresearch` Docker Hub account were compromised and a malicious image pushed under a tag we rely on, a redeploy could pull the malicious image. (Pulled images are cached by Railway per build; existing deploys are not retroactively swapped.)
+- **Silent rebuilds of an immutable-looking tag:** Docker Hub tags are mutable unless pinned by digest. We pin by tag, not digest.
+
+Mitigation: This is an accepted risk for v1 because the alternative (building from source, tracking upstream's multi-stage Dockerfile ourselves) adds significantly more maintenance surface. If this becomes a concern, we can upgrade the pin to `FROM nousresearch/hermes-agent@sha256:<digest>` — which is immutable — and bump the digest alongside the tag on each upgrade. We should also subscribe to Nous Research's release channel for security advisories.
+
+### Risk 7 — Slack user access is gated entirely by `SLACK_ALLOWED_USERS`
+Hermes exposes exactly one per-user allowlist for the Slack gateway: the `SLACK_ALLOWED_USERS` environment variable. It is a comma-separated list of Slack member IDs, set in Railway. This is the *only* Slack user-level access control in the stack — there is no Hermes-side role system, no dashboard UI for managing allowed users, and no second-factor check. Whoever is listed there can interact with the bot in any channel the bot is invited to.
+
+Two specific concerns this creates:
+
+- **First-deploy confusion.** Upstream docs for the pinned version describe the Slack gateway as denying all messages when `SLACK_ALLOWED_USERS` is unset. If ignored at first deploy, will end up with either a silent bot (fail-closed) or an unrestricted one (fail-open). Both are unwanted.
+- **Membership drift on offboarding.** When an engineer leaves the team, their Slack member ID must be removed from `SLACK_ALLOWED_USERS` in Railway. There is no automatic sync with the Slack workspace or with Echobind's identity provider. Leaving a departed user in the list keeps them authorized to invoke the agent from any workspace they still belong to.
+
+Mitigation: Make `SLACK_ALLOWED_USERS` a required field in the Railway template prompts (to be documented in `railway/template-notes.md` when written). Treat updates to the allowlist as a standard step in Echobind's offboarding checklist. Add a note to the README's troubleshooting section stating that "bot online in Slack but does not respond" is most likely a missing or incorrect `SLACK_ALLOWED_USERS`. Verify the unset-behavior empirically against our pinned Hermes version during first production deploy and update this risk with the observed default.
 
 ---
 

@@ -36,15 +36,39 @@ Clicking this button will:
 
 These are set in Railway during and after deployment. They are never stored in this repository.
 
-| Variable | Service | Description |
-|---|---|---|
-| `TS_AUTHKEY` | Tailscale | Auth key from Tailscale admin console. Use a reusable key. |
-| `LLM_PROVIDER_API_KEY` | Hermes | API key for your LLM provider (e.g., OpenRouter, Anthropic) |
-| `LLM_MODEL` | Hermes | Model identifier (e.g., `openai/gpt-4o` on OpenRouter) |
-| `HERMES_HOME` | Hermes | Set to `/data/.hermes` — tells Hermes where to store state |
-| `HOME` | Hermes | Set to `/data` — required for Hermes path resolution |
+### Tailscale service
 
-Additional optional variables for messaging platform integration are documented in `docs/secrets-guide.md`.
+| Variable | Description |
+|---|---|
+| `TS_AUTHKEY` | Auth key from the [Tailscale admin console](https://login.tailscale.com/admin/settings/keys). Use a **reusable** key so the node can rejoin the tailnet after restarts. |
+
+### Hermes service — LLM provider
+
+Set the API key for whichever provider you want Hermes to use. OpenRouter is recommended for a first deploy because one key gives you access to 200+ models.
+
+| Variable | Required | Description |
+|---|---|---|
+| `OPENROUTER_API_KEY` | If using OpenRouter | Key from [openrouter.ai/keys](https://openrouter.ai/keys) |
+| `ANTHROPIC_API_KEY` | If using Anthropic directly | Key from the Anthropic Console |
+| `OPENAI_API_KEY` | If using OpenAI directly | Key from the OpenAI dashboard |
+| `HERMES_INFERENCE_PROVIDER` | Optional | Explicitly selects the provider (e.g., `openrouter`, `anthropic`, `openai`). Defaults to `auto`, which picks based on which key(s) are present. |
+
+The specific model to use is set from the Hermes dashboard after first boot, **not** via an env var. Hermes writes your choice to `config.yaml` in the persistent volume.
+
+### Hermes service — Slack gateway (required for Slack use)
+
+| Variable | Description |
+|---|---|
+| `SLACK_BOT_TOKEN` | Bot token, format `xoxb-...` |
+| `SLACK_APP_TOKEN` | App-level token for Socket Mode, format `xapp-...` |
+
+If both are absent the container still starts, but the Slack integration will not connect and `entrypoint.sh` will log a warning.
+
+### Other env vars you should *not* need to set
+
+The upstream Hermes image already sets `HERMES_HOME=/opt/data` and declares the volume at that path. **Do not set `HERMES_HOME` or `HOME` in Railway** — doing so will desync the container from the volume.
+
+Additional optional variables (Telegram, Discord, WhatsApp tokens, custom base URLs, timeout overrides) are documented in `docs/secrets-guide.md` and in the [upstream environment variables reference](https://github.com/NousResearch/hermes-agent/blob/main/website/docs/reference/environment-variables.md).
 
 ---
 
