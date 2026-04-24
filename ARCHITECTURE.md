@@ -92,8 +92,10 @@ For multi-agent setups, replicate the entire right-hand side per agent — each 
 **What the container does NOT have:**
 
 - A public Railway domain (worker service type prevents this)
-- A web dashboard (out of scope for v1 — `hermes dashboard` is a separate upstream command)
+- An always-on web dashboard server (the `hermes dashboard` command exists upstream but is not run at container start — see ad-hoc dashboard note below)
 - Any exposed inbound ports
+
+**Ad-hoc dashboard access:** When a maintainer wants the Hermes web dashboard, they open an SSH session with local-port forwarding (`ssh -L 9119:localhost:9119 hermes@<host>`) and run `hermes dashboard` inside. The dashboard binds only to the container's `localhost`, so it's unreachable from the tailnet unless the maintainer is actively tunneling to it. Closing the SSH session ends dashboard reachability. See `docs/dashboard-access.md`.
 
 **Version:** Pinned in the `Dockerfile` via the base-image tag — `FROM nousresearch/hermes-agent:<version>`. See [Version Pinning](#version-pinning) below.
 
@@ -258,6 +260,28 @@ This section records significant architecture decisions, when they were made, an
 
 ---
 
+### 2026-04-24 — Multi-agent-per-project via service duplication, not via N-service templates
+
+**Decision:** The rome-on-rails Railway template ships a single Hermes service. Operators who need multiple agents in the same Railway project use Railway's "Duplicate Service" UI action to clone the Hermes service as many times as needed, overriding per-agent env vars (`TS_HOSTNAME`, `SLACK_BOT_TOKEN`, `SLACK_APP_TOKEN`, `SLACK_ALLOWED_USERS`) on each duplicate. Shared-across-project env vars (LLM provider key, `TS_AUTHKEY`, `HERMES_INFERENCE_PROVIDER`) are copied by the duplication action and left as-is. We do not publish a 2-service, 3-service, etc. template variant.
+
+**Rationale:** Railway templates fix service count at publish time. A template configured for N services cannot serve clients whose required N differs. Publishing multiple templates (one per N) would multiply the surface area we maintain and test, without giving operators anything they can't already get by duplicating a service. Duplication is a first-class Railway UI feature — it copies the Dockerfile reference, all env vars, and all service config — which makes "one template, scale by duplication" straightforward to document and scale to arbitrary N.
+
+This became a V1 requirement (not future work) when the Echobind team confirmed that a single client may need multiple Hermes agents — each with its own Slack app — inside a single Railway project. Separate Railway projects remain the right pattern when agents belong to genuinely separate clients or billing owners (see the README's Multi-Agent section); duplicated services are the pattern within one client's fleet.
+
+**Hostname collision risk addressed:** The entrypoint's default `TS_HOSTNAME` derivation — `${RAILWAY_PROJECT_NAME}-${RAILWAY_ENVIRONMENT_NAME}` — is identical across every service in the same project. Duplicated services that inherit this default would all try to claim the same tailnet hostname and collide. Mitigation: `docs/multi-agent.md` and the `railway/template-notes.md` prompt copy explicitly instruct operators to set a unique `TS_HOSTNAME` on every duplicated service. The auto-derive stays as a sensible default for the first (and only) service in a solo deployment.
+
+**Slack-app crosswiring risk addressed:** A duplicated service inherits the original's `SLACK_BOT_TOKEN` / `SLACK_APP_TOKEN`. If the operator doesn't override these before the new service finishes its first deploy, two containers end up connected to the same Slack app and both respond to every message. Captured as a risk in `HANDOFF.md`.
+
+**Alternatives considered:**
+
+- **Publish multiple templates (2-agent, 3-agent, …).** Rejected: template count explodes, each variant needs its own testing, and still doesn't serve clients whose N falls outside the published set.
+- **Multiple Hermes processes inside a single container.** Rejected: would require a real supervisor (s6-overlay, supervisord) instead of the current bash-backgrounding pattern, and re-introduces the two-Slack-apps-per-container coordination problem we'd be trying to avoid.
+- **Separate Railway projects for every agent, even within one client.** Rejected as mandatory, preserved as optional (Pattern A in the README). Creates per-project billing overhead, multiplies Railway access-control surface, and forces clients with a fleet of agents to click the deploy button N times.
+
+**Validated:** Not yet. Next step is to publish the single-service template and run through the duplication flow end-to-end with a throwaway second agent.
+
+---
+
 ### 2026-04-24 — Propagate runtime env vars to interactive shells via `/etc/profile.d/`
 
 **Decision:** On every container start, `entrypoint.sh` writes `/etc/profile.d/hermes-env.sh` with re-exports of the Railway-injected env vars the admin UX cares about (LLM provider keys, `HERMES_INFERENCE_PROVIDER` and related, Slack tokens, `SLACK_ALLOWED_USERS`, etc.). The file lives on the container filesystem (not the volume), is regenerated from the live env on each container start, and has mode 644.
@@ -380,7 +404,7 @@ s6-overlay or supervisord would provide symmetric supervision (restart each proc
 
 **Rationale:** Echobind's primary user-facing access pattern is Slack. The gateway is the mode that connects to Slack.
 
-**Note (updated 2026-04-24):** We previously believed `hermes gateway run` also served the web dashboard on port 9119. It does not — the dashboard is a separate `hermes dashboard` command. The dashboard is out of scope for v1; maintainer access goes through `tailscale ssh` + the `hermes` CLI instead.
+**Note (updated 2026-04-24):** We previously believed `hermes gateway run` also served the web dashboard on port 9119. It does not — the dashboard is a separate `hermes dashboard` command, and an *always-on* dashboard remains out of scope for v1 (it would require a second long-running process in the container and formal supervision). Ad-hoc dashboard access is supported: maintainers start the dashboard by hand from inside an SSH session and tunnel it over `ssh -L` to their laptop. See `docs/dashboard-access.md`. Routine maintenance still goes through `tailscale ssh` + the `hermes` CLI.
 
 ---
 

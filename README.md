@@ -21,7 +21,7 @@ Before you deploy, you need:
 
 ## Deploy
 
-[![Deploy on Railway](https://railway.com/button.svg)](https://railway.com/template/TEMPLATE_ID_PLACEHOLDER)
+[![Deploy on Railway](https://railway.com/button.svg)](https://railway.com/deploy/NBsSYG?utm_medium=integration&utm_source=template&utm_campaign=generic)
 
 Clicking this button will:
 1. Ask you to connect your GitHub account if you haven't already
@@ -42,7 +42,7 @@ These are set in Railway during and after deployment. They are never stored in t
 | Variable | Required | Description |
 |---|---|---|
 | `TS_AUTHKEY` | Yes | Reusable Tailscale auth key from [tailscale.com/admin/settings/keys](https://login.tailscale.com/admin/settings/keys). Without this, the container can't register with your tailnet and you won't be able to SSH in. Slack will still work. |
-| `TS_HOSTNAME` | No | Custom tailnet hostname. Defaults to `${RAILWAY_PROJECT_NAME}-${RAILWAY_ENVIRONMENT_NAME}` — unique per (project, environment) for multi-agent setups. |
+| `TS_HOSTNAME` | No (see note) | Custom tailnet hostname. Defaults to `${RAILWAY_PROJECT_NAME}-${RAILWAY_ENVIRONMENT_NAME}`. **Required if you duplicate this service to run multiple agents in the same Railway project** — the default is identical for every service in a project and collides in Tailscale. See [docs/multi-agent.md](./docs/multi-agent.md). |
 | `TS_EXTRA_ARGS` | No | Extra flags passed verbatim to `tailscale up` (e.g., `--advertise-tags=tag:hermes-agent` if you use ACL tags). Do not include `--authkey`, `--hostname`, or `--ssh` — the entrypoint sets those. |
 
 ### LLM provider (at least one required)
@@ -103,6 +103,20 @@ That's it — no subnet route approval, no split DNS configuration, no port forw
 
 See [docs/tailscale-setup.md](./docs/tailscale-setup.md) for deeper Tailscale topics (ACLs, hostname customization, troubleshooting).
 
+### Reaching the Hermes web dashboard (optional, ad-hoc)
+
+The dashboard is not started by default. When you need it, open an SSH session with a local-port forward and run `hermes dashboard` inside:
+
+```bash
+ssh -L 9119:localhost:9119 hermes@<agent-hostname>
+# inside the container:
+hermes dashboard &
+# on your laptop:
+open http://localhost:9119
+```
+
+Full walkthrough (including Windows OpenSSH, MagicDNS fallbacks, and multi-agent port conventions): [docs/dashboard-access.md](./docs/dashboard-access.md).
+
 ---
 
 ## Updating Hermes
@@ -119,16 +133,25 @@ Do not run `hermes update` inside the container. That command upgrades Hermes un
 
 ---
 
-## Multi-Agent: running several Hermes instances on one tailnet
+## Multi-Agent: running several Hermes instances
 
-The whole point of the single-service-per-project architecture is that you can deploy rome-on-rails multiple times on the same tailnet without conflicts. Each deployment:
+There are two supported patterns, depending on how independent the agents are:
 
-- Is its own Railway project
-- Has its own Tailscale auth key (set per project in Railway env vars)
-- Registers as a separate tailnet node with a unique hostname (derived from the Railway project name, or set via `TS_HOSTNAME`)
-- Has its own Slack app and tokens — the bot's display name in Slack comes from the Slack app's config, not from any rome-on-rails setting
+### Pattern A — separate Railway projects (one per client or team)
+Deploy the template a second time (click the button again). You get a fresh Railway project with its own Hermes service. Each project:
 
-So "Agent A" and "Agent B" can coexist on the same tailnet and in the same Slack workspace, with zero shared config between them.
+- Has its own Tailscale auth key
+- Registers as a separate tailnet node with a unique hostname
+- Has its own Slack app, LLM provider key, and Railway access list
+
+Use this when agents belong to different clients, different billing owners, or different maintainer groups. It's the simplest and cleanest isolation.
+
+### Pattern B — multiple services in one Railway project (one per agent within a client's fleet)
+Deploy the template once, then use Railway's **Duplicate Service** action to create additional Hermes services inside the same project. Each service registers as its own tailnet node with its own Slack app.
+
+Use this when several agents serve the same client — one Slack workspace with multiple bots, or multiple Slack workspaces owned by the same organization. Shared across the project: the LLM provider key and `TS_AUTHKEY`. Per-agent: `TS_HOSTNAME`, `SLACK_BOT_TOKEN`, `SLACK_APP_TOKEN`, `SLACK_ALLOWED_USERS`.
+
+Full walkthrough — including the footgun where duplicated services ship with the original's Slack tokens and accidentally cause two bots to answer every message — in [docs/multi-agent.md](./docs/multi-agent.md).
 
 ---
 
