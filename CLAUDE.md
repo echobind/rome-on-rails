@@ -2,7 +2,7 @@
 
 ## What This Project Is
 
-rome-on-rails is a Railway deployment template for Hermes (NousResearch/hermes-agent), an AI agent tool. The goal is a one-click Railway deploy that results in a private, Tailscale-only Hermes instance — Hermes is never exposed to the public internet.
+rome-on-rails is a Railway deployment template for Hermes (NousResearch/hermes-agent), an AI agent tool. The goal is a one-click Railway deploy that results in a private, Tailscale-only Hermes instance — Hermes is never exposed to the public internet, and maintainers reach it via `tailscale ssh` from their tailnet.
 
 **Naming:** `rome-on-rails` = this repo and project. `Hermes` = the third-party agent being deployed. Do not conflate them.
 
@@ -28,8 +28,9 @@ rome-on-rails is a Railway deployment template for Hermes (NousResearch/hermes-a
 
 **Never:**
 - Commit secrets or API keys
-- Generate a public Railway domain for the Hermes service
+- Generate a public Railway domain for the Hermes service (even though the container exposes no ports, don't add surface)
 - Run `hermes update` in any script (this bypasses version pinning)
+- Set `GATEWAY_ALLOW_ALL_USERS=true` anywhere (this disables all allowlists and defeats the access model)
 - Add unrelated features — scope is defined in the project description
 
 ## Living Documents — Always Update
@@ -50,34 +51,45 @@ rome-on-rails/
 ├── README.md              ← setup and security guide
 ├── ARCHITECTURE.md        ← authoritative technical reference
 ├── HANDOFF.md             ← risks and maintainer notes
-├── Dockerfile             ← builds the Hermes container; pins version
-├── entrypoint.sh          ← startup script; reads env vars, starts gateway
+├── Dockerfile             ← builds the Hermes container (with Tailscale); pins version
+├── entrypoint.sh          ← startup script; starts tailscaled then execs upstream entrypoint
 ├── railway/
 │   └── template-notes.md  ← documents Railway UI config (can't be in-repo)
 └── docs/
-    ├── tailscale-setup.md
-    └── secrets-guide.md
+    ├── tailscale-setup.md ← Tailscale operational guide
+    └── secrets-guide.md   ← environment variable reference
 ```
 
 ## Key Technical Decisions (do not revisit without good reason)
 
-- **Two Railway services:** Hermes (worker, no public domain) + Tailscale (subnet router)
-- **Access pattern:** Tailscale subnet router bridges tailnet to Railway private network
-- **Version pinning:** `FROM nousresearch/hermes-agent:<version>` in Dockerfile (official Docker Hub image, date-based tags like `v2026.4.16`)
-- **Volume:** Railway volume mounts at `/opt/data` (upstream default — no env overrides)
-- **Entrypoint:** `entrypoint.sh` is a thin wrapper that validates env vars then `exec`s upstream `/opt/hermes/docker/entrypoint.sh`
-- **Start command:** `hermes gateway run` — serves Slack integration and dashboard on port 9119 in one process
-- **Secrets:** Railway environment variables only — never in the volume or repo
-- **No public URL:** Hermes deployed as worker type; Railway never assigns it a domain
+- **One Railway service per deployment:** a single `hermes` service. No separate Tailscale service. Tailscale runs inside the Hermes container.
+- **Access pattern:** `tailscale ssh hermes@<agent-hostname>` from any device on the tailnet. No public URL, no inbound ports, no SSH keys to manage.
+- **Multi-agent support:** each rome-on-rails deployment is a separate Railway project with its own `TS_AUTHKEY`. Each registers as a unique tailnet node — no CIDR conflicts, no hostname collisions.
+- **Version pinning:** `FROM nousresearch/hermes-agent:<version>` in Dockerfile (official Docker Hub image, date-based tags like `v2026.4.16`). Tailscale installed from the apt repo, unpinned.
+- **Volume:** Railway volume mounts at `/opt/data` (upstream default — no env overrides). Tailscale state lives at `/opt/data/.tailscale/` for identity persistence.
+- **Entrypoint:** `entrypoint.sh` starts `tailscaled` (userspace networking mode) in the background, runs `tailscale up --ssh`, then `exec`s into upstream `/opt/hermes/docker/entrypoint.sh`. Upstream handles privilege drop + Hermes startup.
+- **Process supervision:** bash backgrounding (no s6-overlay). Primary (Hermes) / secondary (tailscaled) asymmetry suits this pattern — if tailscaled dies, Hermes keeps running; if Hermes dies, container exits and Railway restarts everything.
+- **Start command:** `hermes gateway run` — connects outbound to Slack via Socket Mode. No dashboard in v1 (it's a separate upstream command that would need its own service).
+- **Secrets:** Railway environment variables only — never in the volume or repo.
+- **No public URL, no inbound ports:** Hermes deployed as worker type; Dockerfile has no `EXPOSE` directive.
+- **`hermes` CLI symlink:** `/usr/local/bin/hermes` → `/opt/hermes/.venv/bin/hermes` so the CLI is reachable from any interactive shell on `tailscale ssh`.
 
 Full rationale in `ARCHITECTURE.md`.
 
 ## Commands
 
-Local build and smoke-test (runs the image; will exit quickly without valid env vars):
+Local build and smoke-test (runs the image; exits cleanly without TS_AUTHKEY, warns about missing env vars):
 ```bash
 docker build -t rome-on-rails:dev .
-docker run --rm -e HERMES_INFERENCE_PROVIDER=openrouter -e OPENROUTER_API_KEY=sk-... rome-on-rails:dev
+docker run --rm rome-on-rails:dev
+```
+
+Full local test with Tailscale (registers a test node on your tailnet; clean up in admin after):
+```bash
+export TS_AUTHKEY="$(cat /path/to/reusable-key)"
+docker run --rm -e TS_AUTHKEY -e TS_HOSTNAME=rome-on-rails-local-test rome-on-rails:dev
+# From another terminal:
+tailscale ssh hermes@rome-on-rails-local-test
 ```
 
 On Railway the Dockerfile is built and deployed automatically on push to the tracked branch. No manual deploy command.
