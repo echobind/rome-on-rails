@@ -258,6 +258,18 @@ This section records significant architecture decisions, when they were made, an
 
 ---
 
+### 2026-04-24 — Propagate runtime env vars to interactive shells via `/etc/profile.d/`
+
+**Decision:** On every container start, `entrypoint.sh` writes `/etc/profile.d/hermes-env.sh` with re-exports of the Railway-injected env vars the admin UX cares about (LLM provider keys, `HERMES_INFERENCE_PROVIDER` and related, Slack tokens, `SLACK_ALLOWED_USERS`, etc.). The file lives on the container filesystem (not the volume), is regenerated from the live env on each container start, and has mode 644.
+
+**Rationale:** Tailscale SSH spawns login shells via `tailscaled be-child ssh --login-shell=/bin/sh`, which does not inherit the environment of PID 1. Without this step, `hermes status` from a `tailscale ssh` session reported API keys as unset even when the gateway process (PID 1) had them, and `hermes model` / `hermes config edit` couldn't see the provider key they needed to configure a model. Our deliberate choice to keep secrets in Railway env vars only (not as `/opt/data/.env`) was creating a functional gap in the maintainer UX.
+
+**Alternative considered:** Run `hermes setup` once per deployment to let Hermes persist keys to `/opt/data/.env`. Rejected because it would duplicate secrets (Railway env vars + volume file), deviate from the "single source of truth" principle documented in `docs/secrets-guide.md`, and require rotation in two places. Writing to `/etc/profile.d/` keeps Railway env vars as the single source of truth; the file regenerates on every restart from the live environment, so there's no persistence concern and no manual sync required.
+
+**Security note:** Any process already running in the container can read the env vars of processes it owns via `/proc/<pid>/environ`. Exposing those same values through `/etc/profile.d/hermes-env.sh` (world-readable within the container) doesn't expand the attack surface — the file lives on the container filesystem, has the same lifetime as the container, and never touches the persistent volume.
+
+---
+
 ### 2026-04-24 — Pivot from two-service (subnet-router) to single-service (Tailscale-in-container) architecture
 
 **Decision:** Each Hermes deployment runs as a single Railway service. The Tailscale daemon is installed inside the Hermes container and runs alongside the Hermes gateway process. There is no separate Tailscale service, no subnet router, no forwarder service.
