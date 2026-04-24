@@ -154,6 +154,15 @@ In order of likelihood:
 ### SSH connects but `hermes` returns command not found
 - SSH as `hermes@<hostname>`, not `root@<hostname>`. If the symlink at `/usr/local/bin/hermes` was built correctly, it should work for either user. If it doesn't, the Dockerfile's symlink step failed — check Railway build logs.
 
+### `hermes status` over SSH reports API keys as unset even though the gateway is running fine
+Tailscale SSH login shells don't inherit the env of PID 1. Our entrypoint writes `/etc/profile.d/hermes-env.sh` on every container start to propagate the Railway env vars into login shells. If `hermes status` shows keys as unset:
+
+1. Confirm the file exists and has content: `cat /etc/profile.d/hermes-env.sh`
+2. If it's missing or empty: the container may have restarted and the entrypoint didn't run to completion. Check the Railway service logs for the `[rome-on-rails] Writing runtime env vars to /etc/profile.d/` line.
+3. If the file looks right but shell still doesn't see the vars: your SSH session may not be a login shell. `tailscale ssh` uses `--login-shell=/bin/sh` by default, which should source `/etc/profile` → `/etc/profile.d/*.sh`. If you're using a non-standard SSH client or shell-override, you can source the file manually: `. /etc/profile.d/hermes-env.sh`
+
+Note: `.env file: ✗ not found` in `hermes status` output is **expected** — we deliberately don't persist keys to `/opt/data/.env`. Keys live in Railway env vars only.
+
 ### Many stale / offline machines accumulating in Tailscale admin
 Each rebuild that loses state registers a new identity. Over time this accumulates in admin. Delete the offline ones periodically — they don't affect functionality, just add noise. If you're seeing a new machine on every redeploy, confirm the Railway volume is mounted at `/opt/data` (Tailscale state lives at `/opt/data/.tailscale/` and should persist across restarts).
 
