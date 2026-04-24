@@ -124,8 +124,10 @@ Tune group definitions to your team. Tailscale's admin console has a policy simu
 ### Do not set `TS_EXTRA_ARGS=--advertise-exit-node`
 Turning an agent into an exit node means tailnet members can route their public-internet traffic through the Hermes container. Almost never what you want; adds traffic and visibility you don't need.
 
-### Do not share auth keys across agents
-Each agent gets its own `TS_AUTHKEY`. Reasoning: rotation granularity. When an engineer leaves and keys need rotation, you want a clean "one agent per key" mapping so you know what you're rotating.
+### Do not share auth keys across Railway projects
+Each Railway project gets its own `TS_AUTHKEY`. Reasoning: rotation granularity. When an engineer leaves and their access has to be revoked, you want a clean "one project per key" mapping so rotation is a contained, well-defined operation.
+
+Within a single Railway project that hosts multiple agents (duplicated Hermes services — see `docs/multi-agent.md`), sharing a `TS_AUTHKEY` across the services is fine. All services in a project already share the same Railway access-control boundary, so per-service keys don't buy additional isolation — they just multiply what you have to rotate. Use per-service keys only if you have a specific reason (e.g., one of those agents is operated by a different team from the others).
 
 ### Do not SSH as `root@<hostname>` for routine maintenance
 Use `hermes@<hostname>`. The hermes user owns the volume; running `hermes config edit` as root writes files with root ownership and confuses the running gateway process.

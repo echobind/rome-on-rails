@@ -28,7 +28,12 @@ Hermes runs in outbound-only mode (Slack via Socket Mode, LLM via outbound HTTPS
 - An outbound connection to the Tailscale control plane
 - Tailscale SSH enabled, letting maintainers reach an interactive shell via `tailscale ssh hermes@<agent-hostname>`
 
-Multi-agent: each rome-on-rails deployment is its own Railway project with its own Tailscale auth key. Each agent registers as a unique tailnet node with its own MagicDNS hostname — no conflicts between agents.
+Multi-agent is supported two ways:
+
+- **Separate Railway projects** — one per client or billing owner. Each project has its own `TS_AUTHKEY`, its own LLM key, its own Slack apps. Used when agents belong to genuinely different owners.
+- **Multiple services in one Railway project** — one service per agent within a single client's fleet. Added after the initial template deploy via Railway's "Duplicate Service" UI action. Each duplicated service needs `TS_HOSTNAME` + Slack tokens overridden before first deploy (see `docs/multi-agent.md` and Risk 10 below). Shared across services: `TS_AUTHKEY` and the LLM provider key.
+
+Each agent — regardless of which pattern — registers as a unique tailnet node with its own MagicDNS hostname.
 
 Full details: [ARCHITECTURE.md](./ARCHITECTURE.md)
 
@@ -71,6 +76,7 @@ Mitigation: Limit Railway project access to engineers who need it. Use Railway's
 ### Risk 6 — Supply-chain dependency on `nousresearch/hermes-agent` on Docker Hub
 The Hermes service builds `FROM nousresearch/hermes-agent:<version>` — the official Nous Research image on Docker Hub. We rely on that image and tag remaining available, unmodified, and trustworthy.
 
+
 Failure modes this exposes us to:
 
 - **Tag yanked or removed:** A pinned version could become unpullable, blocking future Railway redeploys.
@@ -110,6 +116,19 @@ We run `tailscaled --tun=userspace-networking` because Railway containers don't 
 
 For our usage (SSH sessions + CLI traffic, not bulk data transfer), the throughput penalty is not observable in practice. If a future use case needs high-throughput tailnet traffic (e.g., file copies, tunneled HTTP to a self-hosted LLM), this assumption will need to be re-examined.
 
+### Risk 10 — Slack-app crosswiring on service duplication in a multi-agent project
+When an operator adds a second agent to an existing Railway project using Railway's "Duplicate Service" action (the Pattern B multi-agent flow — see `docs/multi-agent.md`), the duplicated service inherits every env var from the original. If Railway auto-deploys the duplicate before the operator overrides `SLACK_BOT_TOKEN` and `SLACK_APP_TOKEN`, **two containers end up connected to the same Slack app and both respond to every message in that workspace.** The symptom is a bot that appears to be stuttering or double-posting, and debug is confusing because both containers' logs look normal — each thinks it's the only agent serving the workspace.
+
+A related variant: if `TS_HOSTNAME` isn't overridden, the duplicated service registers with the same hostname as the original (both fall back to the `${RAILWAY_PROJECT_NAME}-${RAILWAY_ENVIRONMENT_NAME}` default). Tailscale admin shows two machines fighting over the same name; the most recent registrant wins and the other is unreachable via MagicDNS. Less dangerous than the Slack crosswiring, but also less obvious to detect.
+
+Mitigation:
+
+- `docs/multi-agent.md` explicitly instructs operators to override `TS_HOSTNAME`, `SLACK_BOT_TOKEN`, `SLACK_APP_TOKEN`, and `SLACK_ALLOWED_USERS` on the duplicate **before first deploy**, and recommends pausing auto-deploy on the duplicated service if Railway's UI permits it.
+- The `TS_HOSTNAME` prompt copy in `railway/template-notes.md` flags the hostname-collision case explicitly.
+- No platform-layer enforcement is possible — Railway doesn't offer a hook for "reject deploy if these vars are unchanged since duplication." Operator discipline is the only mitigation. If this risk materializes often enough to be painful, consider adding an entrypoint check that refuses to start the Slack gateway if the bot token matches a known fingerprint from a sibling service in the same project (complex; defer unless needed).
+
+Known-good operator behavior: duplicate the service, immediately open Railway's Variables panel on the duplicate, change the four per-agent vars, save. Then let Railway deploy.
+
 ---
 
 ## Recommendations for Future Maintainers
@@ -137,7 +156,7 @@ If Hermes itself grows a sub-process requirement (e.g., a separate worker), pref
 
 Per the current project scope, the following were explicitly deferred:
 
-- **The Hermes web dashboard.** Upstream `hermes dashboard` is a separate command; running it alongside the gateway would require either a second service (breaks multi-agent) or in-container process management complexity. Out of scope for v1; maintainers use `tailscale ssh` + `hermes` CLI instead.
+- **An always-on Hermes web dashboard.** Upstream `hermes dashboard` is a separate command; running it as a second long-running process alongside the gateway would require a real supervisor (s6-overlay, supervisord) instead of our bash-backgrounding pattern. Deferred. Ad-hoc dashboard access **is** supported and documented — maintainers start the dashboard by hand from inside an SSH session and tunnel it to their laptop via `ssh -L`. See `docs/dashboard-access.md`. If ad-hoc use becomes frequent enough that operators ask for a persistent dashboard, re-evaluate the supervisor upgrade at that point.
 - **Enterprise SSO or SAML.** Not needed when the only human-facing surface is Slack (handled via Slack's own auth).
 - **Advanced observability dashboards (Grafana, etc.).** Railway's log viewer + `hermes logs` via SSH is sufficient.
 - **Multi-region Railway deployments.** Each rome-on-rails is a single-region Railway project.
