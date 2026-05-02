@@ -1,0 +1,708 @@
+{
+  "info": {
+    "_postman_id": "4d8057da-586d-4eda-be9c-4f6b0acd21b9",
+    "name": "Rome on Rails",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json",
+    "_exporter_id": "49006926",
+    "_collection_link": "https://go.postman.co/collection/49006926-4d8057da-586d-4eda-be9c-4f6b0acd21b9?source=collection_link"
+  },
+  "item": [
+    {
+      "name": "Require Workspace Token",
+      "item": [
+        {
+          "name": "project-deploy-from-template",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "body": {
+              "mode": "graphql",
+              "graphql": {
+                "query": "mutation DeployTemplate($input: TemplateDeployV2Input!) {\r\n  templateDeployV2(input: $input) {\r\n    projectId\r\n  }\r\n}",
+                "variables": "{\r\n  \"input\": {\r\n    \"templateId\": \"{{templateId}}\",\r\n    \"serializedConfig\": {\r\n        \"buckets\": {},\r\n        \"services\": {\r\n            \"86671e03-1157-484c-95b3-72c734ec7bc5\": {\r\n                \"icon\": \"https://echobind.com/images/eb-logo.svg\",\r\n                \"name\": \"{{TS_HOSTNAME}}\",\r\n                \"deploy\": {\r\n                    \"startCommand\": null,\r\n                    \"healthcheckPath\": null,\r\n                    \"restartPolicyType\": \"ON_FAILURE\",\r\n                    \"restartPolicyMaxRetries\": 10\r\n                },\r\n                \"source\": {\r\n                    \"repo\": \"https://github.com/echobind/rome-on-rails\",\r\n                    \"rootDirectory\": null\r\n                },\r\n                \"variables\": {\r\n                    \"TS_AUTHKEY\": {\r\n                        \"isOptional\": false,\r\n                        \"description\": \"reusable Tailscale key \",\r\n                        \"defaultValue\": \"{{TS_AUTHKEY}}\"\r\n                    },\r\n                    \"TS_HOSTNAME\": {\r\n                        \"isOptional\": false,\r\n                        \"description\": \"make unique for multi-agent deployments\",\r\n                        \"defaultValue\": \"{{TS_HOSTNAME}}\"\r\n                    },\r\n                    \"GOOGLE_API_KEY\": {\r\n                        \"isOptional\": true,\r\n                        \"description\": \"add if using Google LLM\",\r\n                        \"defaultValue\": \"\"\r\n                    },\r\n                    \"OPENAI_API_KEY\": {\r\n                        \"isOptional\": true,\r\n                        \"description\": \"add if using Open API\",\r\n                        \"defaultValue\": \"\"\r\n                    },\r\n                    \"SLACK_APP_TOKEN\": {\r\n                        \"isOptional\": false,\r\n                        \"description\": \"provided in Slack app manager (https://api.slack.com/apps)\",\r\n                        \"defaultValue\": \"{{SLACK_APP_TOKEN}}\"\r\n                    },\r\n                    \"SLACK_BOT_TOKEN\": {\r\n                        \"isOptional\": false,\r\n                        \"description\": \"provided in Slack app manager (https://api.slack.com/apps)\",\r\n                        \"defaultValue\": \"{{SLACK_BOT_TOKEN}}\"\r\n                    },\r\n                    \"ANTHROPIC_API_KEY\": {\r\n                        \"isOptional\": true,\r\n                        \"description\": \"add if using Anthropic\",\r\n                        \"defaultValue\": \"\"\r\n                    },\r\n                    \"OPENROUTER_API_KEY\": {\r\n                        \"isOptional\": true,\r\n                        \"description\": \"add if using Open Router\",\r\n                        \"defaultValue\": \"{{OPENROUTER_API_KEY}}\"\r\n                    },\r\n                    \"SLACK_HOME_CHANNEL\": {\r\n                        \"isOptional\": true,\r\n                        \"description\": \"a channel ID where Hermes will deliver scheduled messages, cron job results, etc.\",\r\n                        \"defaultValue\": \"{{SLACK_HOME_CHANNEL}}\"\r\n                    },\r\n                    \"SLACK_ALLOWED_USERS\": {\r\n                        \"isOptional\": false,\r\n                        \"description\": \"comma delimited list of Slack user IDs\",\r\n                        \"defaultValue\": \"{{SLACK_ALLOWED_USERS}}\"\r\n                    }\r\n                },\r\n                \"volumeMounts\": {\r\n                    \"86671e03-1157-484c-95b3-72c734ec7bc5\": {\r\n                        \"mountPath\": \"/opt/data\"\r\n                    }\r\n                }\r\n            }\r\n        }\r\n    },\r\n    \"workspaceId\": \"{{workspaceId}}\"\r\n  }\r\n}"
+              }
+            },
+            "url": {
+              "raw": "https://backboard.railway.com/graphql/v2",
+              "protocol": "https",
+              "host": [
+                "backboard",
+                "railway",
+                "com"
+              ],
+              "path": [
+                "graphql",
+                "v2"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "project-create",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "body": {
+              "mode": "graphql",
+              "graphql": {
+                "query": "mutation CreateProject($input: ProjectCreateInput!) {\r\n  projectCreate(input: $input) {\r\n    id\r\n    name\r\n    environments { edges { node { id name } } }\r\n  }\r\n}",
+                "variables": "{\r\n  \"input\": {\r\n    \"name\": \"{{projectName}}\",\r\n    \"workspaceId\": \"{{workspaceId}}\"\r\n  }\r\n}"
+              }
+            },
+            "url": {
+              "raw": "https://backboard.railway.com/graphql/v2",
+              "protocol": "https",
+              "host": [
+                "backboard",
+                "railway",
+                "com"
+              ],
+              "path": [
+                "graphql",
+                "v2"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "project-token-create",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "body": {
+              "mode": "graphql",
+              "graphql": {
+                "query": "mutation projectTokenCreate($input: ProjectTokenCreateInput!) {\r\n  projectTokenCreate(input: $input)\r\n}",
+                "variables": "{\r\n  \"input\": {\r\n    \"environmentId\": \"{{environmentId}}\",\r\n    \"name\": \"{{projectTokenName}}\",\r\n    \"projectId\": \"{{projectId}}\"\r\n  }\r\n}"
+              }
+            },
+            "url": {
+              "raw": "https://backboard.railway.com/graphql/v2",
+              "protocol": "https",
+              "host": [
+                "backboard",
+                "railway",
+                "com"
+              ],
+              "path": [
+                "graphql",
+                "v2"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "project-token-delete",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "body": {
+              "mode": "graphql",
+              "graphql": {
+                "query": "mutation projectTokenDelete($id: String!) {\r\n  projectTokenDelete(id: $id)\r\n}",
+                "variables": "{\r\n\t\"id\": \"{{projectTokenId}}\"\r\n}"
+              }
+            },
+            "url": {
+              "raw": "https://backboard.railway.com/graphql/v2",
+              "protocol": "https",
+              "host": [
+                "backboard",
+                "railway",
+                "com"
+              ],
+              "path": [
+                "graphql",
+                "v2"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "service-deploy-from-template",
+          "event": [
+            {
+              "listen": "prerequest",
+              "script": {
+                "exec": [
+                  "pm.collectionVariables.set(\"serviceKey\", crypto.randomUUID());\r",
+                  "pm.collectionVariables.set(\"volumeKey\", crypto.randomUUID());"
+                ],
+                "type": "text/javascript",
+                "packages": {},
+                "requests": {}
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [],
+            "body": {
+              "mode": "graphql",
+              "graphql": {
+                "query": "mutation DeployTemplate($input: TemplateDeployV2Input!) {\r\n  templateDeployV2(input: $input) {\r\n    projectId\r\n  }\r\n}",
+                "variables": "{\r\n  \"input\": {\r\n    \"templateId\": \"{{templateId}}\",\r\n    \"serializedConfig\": {\r\n        \"buckets\": {},\r\n        \"services\": {\r\n            \"{{serviceKey}}\": {\r\n                \"icon\": \"https://echobind.com/images/eb-logo.svg\",\r\n                \"name\": \"{{TS_HOSTNAME}}\",\r\n                \"deploy\": {\r\n                    \"startCommand\": null,\r\n                    \"healthcheckPath\": null,\r\n                    \"restartPolicyType\": \"ON_FAILURE\",\r\n                    \"restartPolicyMaxRetries\": 10\r\n                },\r\n                \"source\": {\r\n                    \"repo\": \"https://github.com/echobind/rome-on-rails\",\r\n                    \"rootDirectory\": null\r\n                },\r\n                \"variables\": {\r\n                    \"TS_AUTHKEY\": {\r\n                        \"isOptional\": false,\r\n                        \"description\": \"reusable Tailscale key \",\r\n                        \"defaultValue\": \"{{TS_AUTHKEY}}\"\r\n                    },\r\n                    \"TS_HOSTNAME\": {\r\n                        \"isOptional\": false,\r\n                        \"description\": \"make unique for multi-agent deployments\",\r\n                        \"defaultValue\": \"{{TS_HOSTNAME}}\"\r\n                    },\r\n                    \"GOOGLE_API_KEY\": {\r\n                        \"isOptional\": true,\r\n                        \"description\": \"add if using Google LLM\",\r\n                        \"defaultValue\": \"\"\r\n                    },\r\n                    \"OPENAI_API_KEY\": {\r\n                        \"isOptional\": true,\r\n                        \"description\": \"add if using Open API\",\r\n                        \"defaultValue\": \"\"\r\n                    },\r\n                    \"SLACK_APP_TOKEN\": {\r\n                        \"isOptional\": false,\r\n                        \"description\": \"provided in Slack app manager (https://api.slack.com/apps)\",\r\n                        \"defaultValue\": \"{{SLACK_APP_TOKEN}}\"\r\n                    },\r\n                    \"SLACK_BOT_TOKEN\": {\r\n                        \"isOptional\": false,\r\n                        \"description\": \"provided in Slack app manager (https://api.slack.com/apps)\",\r\n                        \"defaultValue\": \"{{SLACK_BOT_TOKEN}}\"\r\n                    },\r\n                    \"ANTHROPIC_API_KEY\": {\r\n                        \"isOptional\": true,\r\n                        \"description\": \"add if using Anthropic\",\r\n                        \"defaultValue\": \"\"\r\n                    },\r\n                    \"OPENROUTER_API_KEY\": {\r\n                        \"isOptional\": true,\r\n                        \"description\": \"add if using Open Router\",\r\n                        \"defaultValue\": \"{{OPENROUTER_API_KEY}}\"\r\n                    },\r\n                    \"SLACK_HOME_CHANNEL\": {\r\n                        \"isOptional\": true,\r\n                        \"description\": \"a channel ID where Hermes will deliver scheduled messages, cron job results, etc.\",\r\n                        \"defaultValue\": \"{{SLACK_HOME_CHANNEL}}\"\r\n                    },\r\n                    \"SLACK_ALLOWED_USERS\": {\r\n                        \"isOptional\": false,\r\n                        \"description\": \"comma delimited list of Slack user IDs\",\r\n                        \"defaultValue\": \"{{SLACK_ALLOWED_USERS}}\"\r\n                    }\r\n                },\r\n                \"volumeMounts\": {\r\n                    \"{{volumeKey}}\": {\r\n                        \"mountPath\": \"/opt/data\"\r\n                    }\r\n                }\r\n            }\r\n        }\r\n    },\r\n    \"workspaceId\": \"{{workspaceId}}\",\r\n    \"projectId\": \"{{projectId}}\",\r\n    \"environmentId\": \"{{environmentId}}\"\r\n  }\r\n}"
+              }
+            },
+            "url": {
+              "raw": "https://backboard.railway.com/graphql/v2",
+              "protocol": "https",
+              "host": [
+                "backboard",
+                "railway",
+                "com"
+              ],
+              "path": [
+                "graphql",
+                "v2"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "me-details (tests bearer token)",
+          "request": {
+            "auth": {
+              "type": "noauth"
+            },
+            "method": "POST",
+            "header": [],
+            "body": {
+              "mode": "graphql",
+              "graphql": {
+                "query": "query { __schema { queryType { name } } }",
+                "variables": ""
+              }
+            },
+            "url": {
+              "raw": "https://backboard.railway.com/graphql/v2",
+              "protocol": "https",
+              "host": [
+                "backboard",
+                "railway",
+                "com"
+              ],
+              "path": [
+                "graphql",
+                "v2"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "list-all-mutations",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "body": {
+              "mode": "graphql",
+              "graphql": {
+                "query": "query InspectMutationArgs {\r\n    __type(name: \"Mutation\") {\r\n      fields {\r\n        name\r\n        args {\r\n          name\r\n          type {\r\n            name\r\n            kind\r\n            ofType { name kind }\r\n          }\r\n        }\r\n      }\r\n    }\r\n  }",
+                "variables": ""
+              }
+            },
+            "url": {
+              "raw": "https://backboard.railway.com/graphql/v2",
+              "protocol": "https",
+              "host": [
+                "backboard",
+                "railway",
+                "com"
+              ],
+              "path": [
+                "graphql",
+                "v2"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "project-token-details",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "body": {
+              "mode": "graphql",
+              "graphql": {
+                "query": "query ListProjectTokens($projectId: String!) {\r\n    projectTokens(projectId: $projectId) {\r\n      edges {\r\n        node {\r\n          id\r\n          name\r\n          createdAt\r\n        }\r\n      }\r\n    }\r\n  }",
+                "variables": "{ \"projectId\": \"{{projectId}}\" }"
+              }
+            },
+            "url": {
+              "raw": "https://backboard.railway.com/graphql/v2",
+              "protocol": "https",
+              "host": [
+                "backboard",
+                "railway",
+                "com"
+              ],
+              "path": [
+                "graphql",
+                "v2"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "inspect-ProjectTokenCreate-input-args",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "body": {
+              "mode": "graphql",
+              "graphql": {
+                "query": "query InspectInput {\r\n    __type(name: \"ProjectTokenInput\") {\r\n      name\r\n      inputFields {\r\n        name\r\n        description\r\n        type { name kind ofType { name kind ofType { name kind } } }\r\n      }\r\n    }\r\n  }",
+                "variables": ""
+              }
+            },
+            "url": {
+              "raw": "https://backboard.railway.com/graphql/v2",
+              "protocol": "https",
+              "host": [
+                "backboard",
+                "railway",
+                "com"
+              ],
+              "path": [
+                "graphql",
+                "v2"
+              ]
+            }
+          },
+          "response": []
+        },
+        {
+          "name": "workspace-details",
+          "request": {
+            "method": "POST",
+            "header": [],
+            "body": {
+              "mode": "graphql",
+              "graphql": {
+                "query": "query workspace($workspaceId: String!) {\r\n  workspace(workspaceId: $workspaceId) {\r\n    __typename\r\n    avatar\r\n    banReason\r\n    createdAt\r\n    # customer\r\n    discordRole\r\n    id\r\n    name\r\n    preferredRegion\r\n    # referredUsers\r\n    slackChannelId\r\n    subscriptionModel\r\n    supportTierOverride\r\n    # team\r\n  }\r\n}",
+                "variables": "{\r\n\t\"workspaceId\": \"{{workspaceId}}\"\r\n}"
+              }
+            },
+            "url": {
+              "raw": "https://backboard.railway.com/graphql/v2",
+              "protocol": "https",
+              "host": [
+                "backboard",
+                "railway",
+                "com"
+              ],
+              "path": [
+                "graphql",
+                "v2"
+              ]
+            }
+          },
+          "response": []
+        }
+      ],
+      "auth": {
+        "type": "bearer",
+        "bearer": [
+          {
+            "key": "token",
+            "value": "{{RAILWAY_WORKSPACE_TOKEN}}",
+            "type": "string"
+          }
+        ]
+      },
+      "event": [
+        {
+          "listen": "prerequest",
+          "script": {
+            "type": "text/javascript",
+            "packages": {},
+            "requests": {},
+            "exec": [
+              ""
+            ]
+          }
+        },
+        {
+          "listen": "test",
+          "script": {
+            "type": "text/javascript",
+            "packages": {},
+            "requests": {},
+            "exec": [
+              ""
+            ]
+          }
+        }
+      ]
+    },
+    {
+      "name": "project-details",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Project-Access-Token",
+            "value": "{{RAILWAY_PROJECT_TOKEN}} ",
+            "type": "text"
+          },
+          {
+            "key": "Content-Type",
+            "value": "application/json",
+            "type": "text"
+          }
+        ],
+        "body": {
+          "mode": "graphql",
+          "graphql": {
+            "query": "query GetProject($id: String!) {\r\n  project(id: $id) {\r\n    id\r\n    name\r\n    workspace { id name }\r\n    environments {\r\n      edges { node { id name } }\r\n    }\r\n    services {\r\n      edges {\r\n        node {\r\n          id\r\n          name\r\n          serviceInstances {\r\n            edges {\r\n              node {\r\n                environmentId\r\n                latestDeployment { id status }\r\n              }\r\n            }\r\n          }\r\n        }\r\n      }\r\n    }\r\n  }\r\n}",
+            "variables": "{\r\n\t\"id\": \"{{projectId}}\"\r\n}"
+          }
+        },
+        "url": {
+          "raw": "https://backboard.railway.com/graphql/v2",
+          "protocol": "https",
+          "host": [
+            "backboard",
+            "railway",
+            "com"
+          ],
+          "path": [
+            "graphql",
+            "v2"
+          ]
+        }
+      },
+      "response": []
+    },
+    {
+      "name": "service-details",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Project-Access-Token",
+            "value": "{{RAILWAY_PROJECT_TOKEN}} ",
+            "type": "text"
+          },
+          {
+            "key": "Content-Type",
+            "value": "application/json",
+            "type": "text"
+          }
+        ],
+        "body": {
+          "mode": "graphql",
+          "graphql": {
+            "query": "query ServiceInstance($serviceId: String!, $environmentId: String!) {\r\n  serviceInstance(serviceId: $serviceId, environmentId: $environmentId) {\r\n    serviceId\r\n    environmentId\r\n    startCommand\r\n    numReplicas\r\n    region\r\n    restartPolicyType\r\n    latestDeployment { id status createdAt }\r\n  }\r\n}",
+            "variables": "{ \"serviceId\": \"{{serviceId}}\", \"environmentId\": \"{{environmentId}}\" }"
+          }
+        },
+        "url": {
+          "raw": "https://backboard.railway.com/graphql/v2",
+          "protocol": "https",
+          "host": [
+            "backboard",
+            "railway",
+            "com"
+          ],
+          "path": [
+            "graphql",
+            "v2"
+          ]
+        }
+      },
+      "response": []
+    },
+    {
+      "name": "service-rename",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Project-Access-Token",
+            "value": "{{RAILWAY_PROJECT_TOKEN}} ",
+            "type": "text"
+          },
+          {
+            "key": "Content-Type",
+            "value": "application/json",
+            "type": "text"
+          }
+        ],
+        "body": {
+          "mode": "graphql",
+          "graphql": {
+            "query": "mutation serviceUpdate($id: String!, $input: ServiceUpdateInput!) {\r\nserviceUpdate(id: $id, input: $input) {\r\n  id\r\n  name\r\n  icon\r\n}\r\n}",
+            "variables": "{\r\n  \"id\": \"{{serviceId}}\",\r\n  \"input\": {\r\n    \"name\": \"Hermes Renamed\"\r\n  }\r\n}"
+          }
+        },
+        "url": {
+          "raw": "https://backboard.railway.com/graphql/v2",
+          "protocol": "https",
+          "host": [
+            "backboard",
+            "railway",
+            "com"
+          ],
+          "path": [
+            "graphql",
+            "v2"
+          ]
+        }
+      },
+      "response": []
+    },
+    {
+      "name": "service-delete",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Project-Access-Token",
+            "value": "{{RAILWAY_PROJECT_TOKEN}} ",
+            "type": "text"
+          },
+          {
+            "key": "Content-Type",
+            "value": "application/json",
+            "type": "text"
+          }
+        ],
+        "body": {
+          "mode": "graphql",
+          "graphql": {
+            "query": "mutation DeleteService($id: String!) {\r\n  serviceDelete(id: $id)\r\n}",
+            "variables": "{ \"id\": \"{{serviceId}}\" }"
+          }
+        },
+        "url": {
+          "raw": "https://backboard.railway.com/graphql/v2",
+          "protocol": "https",
+          "host": [
+            "backboard",
+            "railway",
+            "com"
+          ],
+          "path": [
+            "graphql",
+            "v2"
+          ]
+        }
+      },
+      "response": []
+    },
+    {
+      "name": "template-details",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Project-Access-Token",
+            "value": "{{RAILWAY_PROJECT_TOKEN}} ",
+            "type": "text"
+          },
+          {
+            "key": "Content-Type",
+            "value": "application/json",
+            "type": "text"
+          }
+        ],
+        "body": {
+          "mode": "graphql",
+          "graphql": {
+            "query": "query GetTemplate($code: String!) {\r\n  template(code: $code) {\r\n    id\r\n    name\r\n    serializedConfig\r\n  }\r\n}",
+            "variables": "{ \"code\": \"{{templateCode}}\" }"
+          }
+        },
+        "url": {
+          "raw": "https://backboard.railway.com/graphql/v2",
+          "protocol": "https",
+          "host": [
+            "backboard",
+            "railway",
+            "com"
+          ],
+          "path": [
+            "graphql",
+            "v2"
+          ]
+        }
+      },
+      "response": []
+    },
+    {
+      "name": "deployments-recent",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Project-Access-Token",
+            "value": "{{RAILWAY_PROJECT_TOKEN}} ",
+            "type": "text"
+          },
+          {
+            "key": "Content-Type",
+            "value": "application/json",
+            "type": "text"
+          }
+        ],
+        "body": {
+          "mode": "graphql",
+          "graphql": {
+            "query": "query Deployments($projectId: String!, $serviceId: String!, $environmentId: String!) {\r\n  deployments(\r\n    input: {\r\n      projectId: $projectId,\r\n      serviceId: $serviceId,\r\n      environmentId: $environmentId\r\n    }\r\n    first: 5\r\n  ) {\r\n    edges {\r\n      node {\r\n        id\r\n        status\r\n        createdAt\r\n        staticUrl\r\n      }\r\n    }\r\n  }\r\n}",
+            "variables": "{\r\n  \"projectId\": \"{{projectId}}\",\r\n  \"serviceId\": \"{{serviceId}}\",\r\n  \"environmentId\": \"{{environmentId}}\"\r\n}"
+          }
+        },
+        "url": {
+          "raw": "https://backboard.railway.com/graphql/v2",
+          "protocol": "https",
+          "host": [
+            "backboard",
+            "railway",
+            "com"
+          ],
+          "path": [
+            "graphql",
+            "v2"
+          ]
+        }
+      },
+      "response": []
+    },
+    {
+      "name": "deployment-stop",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Project-Access-Token",
+            "value": "{{RAILWAY_PROJECT_TOKEN}} ",
+            "type": "text"
+          },
+          {
+            "key": "Content-Type",
+            "value": "application/json",
+            "type": "text"
+          }
+        ],
+        "body": {
+          "mode": "graphql",
+          "graphql": {
+            "query": "mutation StopDeployment($id: String!) {\r\n  deploymentStop(id: $id)\r\n}",
+            "variables": "{ \"id\": \"{{deploymentId}}\" }"
+          }
+        },
+        "url": {
+          "raw": "https://backboard.railway.com/graphql/v2",
+          "protocol": "https",
+          "host": [
+            "backboard",
+            "railway",
+            "com"
+          ],
+          "path": [
+            "graphql",
+            "v2"
+          ]
+        }
+      },
+      "response": []
+    },
+    {
+      "name": "deployment-redeploy",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Project-Access-Token",
+            "value": "{{RAILWAY_PROJECT_TOKEN}} ",
+            "type": "text"
+          },
+          {
+            "key": "Content-Type",
+            "value": "application/json",
+            "type": "text"
+          }
+        ],
+        "body": {
+          "mode": "graphql",
+          "graphql": {
+            "query": "mutation RedeployDeployment($id: String!) {\r\n  deploymentRedeploy(id: $id) {\r\n    id\r\n    status\r\n  }\r\n}",
+            "variables": "{ \"id\": \"{{deploymentId}}\" }"
+          }
+        },
+        "url": {
+          "raw": "https://backboard.railway.com/graphql/v2",
+          "protocol": "https",
+          "host": [
+            "backboard",
+            "railway",
+            "com"
+          ],
+          "path": [
+            "graphql",
+            "v2"
+          ]
+        }
+      },
+      "response": []
+    },
+    {
+      "name": "deployment-restart",
+      "request": {
+        "method": "POST",
+        "header": [
+          {
+            "key": "Project-Access-Token",
+            "value": "{{RAILWAY_PROJECT_TOKEN}} ",
+            "type": "text"
+          },
+          {
+            "key": "Content-Type",
+            "value": "application/json",
+            "type": "text"
+          }
+        ],
+        "body": {
+          "mode": "graphql",
+          "graphql": {
+            "query": "mutation RestartDeployment($id: String!) {\r\n  deploymentRestart(id: $id)\r\n}",
+            "variables": "{ \"id\": \"{{deploymentId}}\" }\r\n"
+          }
+        },
+        "url": {
+          "raw": "https://backboard.railway.com/graphql/v2",
+          "protocol": "https",
+          "host": [
+            "backboard",
+            "railway",
+            "com"
+          ],
+          "path": [
+            "graphql",
+            "v2"
+          ]
+        }
+      },
+      "response": []
+    }
+  ],
+  "variable": [
+    {
+      "key": "serviceKey",
+      "value": ""
+    },
+    {
+      "key": "volumeKey",
+      "value": ""
+    }
+  ]
+}

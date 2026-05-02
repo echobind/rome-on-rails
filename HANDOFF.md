@@ -1,6 +1,6 @@
 # HANDOFF.md — rome-on-rails
 
-## Last updated: 2026-04-24
+## Last updated: 2026-04-29
 
 This document is for engineers taking over maintenance of rome-on-rails, or returning to it after an extended absence. It summarizes the architecture, flags known risks, and records recommendations that didn't fit neatly into the README or ARCHITECTURE docs.
 
@@ -128,6 +128,20 @@ Mitigation:
 - No platform-layer enforcement is possible — Railway doesn't offer a hook for "reject deploy if these vars are unchanged since duplication." Operator discipline is the only mitigation. If this risk materializes often enough to be painful, consider adding an entrypoint check that refuses to start the Slack gateway if the bot token matches a known fingerprint from a sibling service in the same project (complex; defer unless needed).
 
 Known-good operator behavior: duplicate the service, immediately open Railway's Variables panel on the duplicate, change the four per-agent vars, save. Then let Railway deploy.
+
+### Risk 11 — Webhook URL setup is a manual per-tenant step
+Railway's GraphQL API exposes `webhookTest` (for sending sample payloads) but does **not** expose mutations to create, update, or delete webhooks programmatically — verified 2026-04-29 against the live schema with a workspace token. The control-plane frontend that operates rome-on-rails deployments relies on webhooks for deployment status updates; an operator must paste the per-tenant receiver URL into Railway's Project Settings → Webhooks panel once per tenant.
+
+If skipped, the tenant's status indicators in the control plane stop updating: deployment lifecycle events (success, failed, crashed) won't reach the UI. The agent itself still works fine — Slack continues to function, `tailscale ssh` access still works, and lifecycle mutations from the control plane (stop/restart/redeploy) still execute correctly. The only thing that breaks is the asynchronous "did my deploy succeed?" feedback loop, so an operator may not realize the webhook is missing until they redeploy and the UI hangs in `BUILDING` forever.
+
+A related foot-gun: the Postman collection at `docs/railway_graphql_collection.json` lists `webhookCreate`/`webhookUpdate`/`webhookDelete` request templates that look like they should work, but those mutations are **not** in Railway's live schema. A future maintainer who finds those entries and assumes they're functional will hit `Cannot query field "webhookCreate" on type "Mutation"`. Treat that collection as a stale hint, not a contract — verify mutations against introspection before relying on them.
+
+Mitigation:
+
+- The operator runbook lives in `docs/webhook-setup.md` and is referenced from the control-plane's tenant-onboarding UI.
+- The control plane's tenant detail page shows a "webhook configured?" indicator that stays gray until the first webhook arrives, turning green permanently after.
+- A scheduled check alerts when any tenant has had >0 deployments but never received a webhook event (catches "operator pasted the wrong URL" too).
+- The relevant introspection query is in `docs/POSTMAN-API-TESTS.md` Phase 7.1 — re-run periodically to detect when programmatic webhook configuration becomes available; if it ever does, this manual step retires.
 
 ---
 

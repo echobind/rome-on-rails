@@ -1,6 +1,6 @@
 # ARCHITECTURE.md — rome-on-rails
 
-## Last updated: 2026-04-24
+## Last updated: 2026-04-29
 
 ---
 
@@ -257,6 +257,31 @@ The current pinned version is the literal tag in the `Dockerfile`. To upgrade:
 ## Decisions Log
 
 This section records significant architecture decisions, when they were made, and why. New decisions are added at the top.
+
+---
+
+### 2026-04-29 — Webhooks from day one for control-plane status updates, with manual per-tenant URL configuration
+
+**Decision:** The control-plane frontend that operates rome-on-rails deployments uses Railway webhooks (one per tenant project) to receive deployment status events. Each tenant gets a unique receiver URL of the shape `https://<control-plane>/api/webhooks/railway/<token>`, where `<token>` is a 128-bit random value generated server-side at tenant-creation time. The webhook URL is configured manually in the Railway dashboard (Project Settings → Webhooks) by an operator at tenant onboarding time. Operator runbook: `docs/webhook-setup.md`.
+
+**Rationale:** Webhooks are the right shape for a multi-tenant ops dashboard — once the receiver is built, it scales to N tenants with no per-tenant runtime cost, and gives sub-second status latency to the UI. Polling was considered (the same query in `docs/POSTMAN-API-TESTS.md` Phase 2.2 already returns deployment status) but rejected: polling cost grows linearly with active deploys, and "did my deploy succeed?" feedback latency is bounded by the polling interval rather than network speed.
+
+**Per-tenant URLs (rather than one shared receiver) chosen because:**
+
+- Tenant isolation is structural, not handler-dependent — a payload-routing bug can't cross tenants.
+- Easier rotation: regenerate one tenant's token, push the new URL to Railway for that one project, the old URL 404s — no impact on other tenants.
+- The URL itself acts as the shared secret. Sufficient given Railway exposes no documented HMAC; mitigated by treating logs containing the token as sensitive.
+
+**Manual setup step accepted as a tradeoff:** Railway's GraphQL API exposes webhook *testing* (`webhookTest` mutation, useful for dev) but **not** webhook *creation/update/deletion* — verified 2026-04-29 against the live schema introspected with a workspace token. The Postman collection at `docs/railway_graphql_collection.json` includes `webhookCreate`/`webhookUpdate`/`webhookDelete` request templates, but those mutations do not exist in the live schema; treat that collection as suggestive only and verify against introspection. An operator must paste the URL into Railway's dashboard once per tenant.
+
+**Mitigations for the manual step:**
+
+- Clear operator runbook at `docs/webhook-setup.md`.
+- A "Test webhook delivery" affordance in the control-plane UI that uses `webhookTest` to verify the round-trip end-to-end.
+- A "webhook configured?" indicator on each tenant detail page that turns green permanently after the first real webhook arrives.
+- A scheduled health check that alerts when any tenant has had >0 deployments but never received a webhook event (catches "operator pasted the wrong URL" too).
+
+**Scope note:** the receiver implementation lives in the control-plane frontend codebase, not in this repo. This decision is recorded here because the operational story for any rome-on-rails deployment now includes a documented webhook-setup step that operators need to follow, and a known risk (`HANDOFF.md` Risk 11) if they skip it. If Railway ever adds programmatic webhook configuration, the manual step retires automatically.
 
 ---
 
