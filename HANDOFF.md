@@ -1,6 +1,6 @@
 # HANDOFF.md — rome-on-rails
 
-## Last updated: 2026-04-24
+## Last updated: 2026-05-14
 
 This document is for engineers taking over maintenance of rome-on-rails, or returning to it after an extended absence. It summarizes the architecture, flags known risks, and records recommendations that didn't fit neatly into the README or ARCHITECTURE docs.
 
@@ -14,6 +14,7 @@ rome-on-rails is a deployment template. It is not a fork of Hermes, and it conta
 2. Adds Tailscale (installed via apt) so the container is itself a tailnet node with SSH enabled
 3. Provides an entrypoint that starts `tailscaled`, brings the Tailscale node up, then hands off to the upstream Hermes entrypoint
 4. Documents how to deploy it on Railway with a Tailscale auth key
+5. Optionally runs a tiny "control sidecar" HTTP service (`roster-control-sidecar.py`) that lets Echobind's control plane (Roster) read and change the agent's LLM model over the tailnet — off unless `ROSTER_CONTROL_TOKEN` is set. See `docs/hermes-control-sidecar-contract.md` and ARCHITECTURE.md's "The Roster Control Sidecar" section.
 
 Hermes runs in outbound-only mode (Slack via Socket Mode, LLM via outbound HTTPS). Maintainers reach the container via `tailscale ssh hermes@<agent-hostname>` on the tailnet. Everything Hermes-specific (skills, memory, sessions, Tailscale state) lives in the persistent volume at `/opt/data`.
 
@@ -27,6 +28,7 @@ Hermes runs in outbound-only mode (Slack via Socket Mode, LLM via outbound HTTPS
 - An outbound WebSocket to Slack (Socket Mode)
 - An outbound connection to the Tailscale control plane
 - Tailscale SSH enabled, letting maintainers reach an interactive shell via `tailscale ssh hermes@<agent-hostname>`
+- Optionally, the Roster control sidecar — a `127.0.0.1`-bound HTTP service exposed onto the tailnet via `tailscale serve`, for remote LLM-model control (only when `ROSTER_CONTROL_TOKEN` is set)
 
 Multi-agent is supported two ways:
 
@@ -129,6 +131,32 @@ Mitigation:
 
 Known-good operator behavior: duplicate the service, immediately open Railway's Variables panel on the duplicate, change the four per-agent vars, save. Then let Railway deploy.
 
+### Risk 11 — Webhook URL setup is a manual per-tenant step
+Railway's GraphQL API exposes `webhookTest` (for sending sample payloads) but does **not** expose mutations to create, update, or delete webhooks programmatically — verified 2026-04-29 against the live schema with a workspace token. The control-plane frontend that operates rome-on-rails deployments relies on webhooks for deployment status updates; an operator must paste the per-tenant receiver URL into Railway's Project Settings → Webhooks panel once per tenant.
+
+If skipped, the tenant's status indicators in the control plane stop updating: deployment lifecycle events (success, failed, crashed) won't reach the UI. The agent itself still works fine — Slack continues to function, `tailscale ssh` access still works, and lifecycle mutations from the control plane (stop/restart/redeploy) still execute correctly. The only thing that breaks is the asynchronous "did my deploy succeed?" feedback loop, so an operator may not realize the webhook is missing until they redeploy and the UI hangs in `BUILDING` forever.
+
+A related foot-gun: the Postman collection at `docs/railway_graphql_collection.json` lists `webhookCreate`/`webhookUpdate`/`webhookDelete` request templates that look like they should work, but those mutations are **not** in Railway's live schema. A future maintainer who finds those entries and assumes they're functional will hit `Cannot query field "webhookCreate" on type "Mutation"`. Treat that collection as a stale hint, not a contract — verify mutations against introspection before relying on them.
+
+Mitigation:
+
+- The operator runbook lives in `docs/webhook-setup.md` and is referenced from the control-plane's tenant-onboarding UI.
+- The control plane's tenant detail page shows a "webhook configured?" indicator that stays gray until the first webhook arrives, turning green permanently after.
+- A scheduled check alerts when any tenant has had >0 deployments but never received a webhook event (catches "operator pasted the wrong URL" too).
+- The relevant introspection query is in `docs/POSTMAN-API-TESTS.md` Phase 7.1 — re-run periodically to detect when programmatic webhook configuration becomes available; if it ever does, this manual step retires.
+
+### Risk 12 — The Roster control sidecar adds a (small, optional, tailnet-only) write surface
+
+When `ROSTER_CONTROL_TOKEN` is set, the container runs the Roster control sidecar — an HTTP service that can **write `config.yaml` and restart the gateway**. It is deliberately minimal (binds `127.0.0.1`, exposed to the tailnet only via `tailscale serve`, bearer-token auth, two functional endpoints) and the agent runs fine without it. But it is the first thing in this template that accepts inbound requests and changes agent state, so it carries real risks:
+
+- **The bearer token is the whole authorization layer.** Transport is plain HTTP — the tailnet's WireGuard encryption is what protects it in flight, and `ROSTER_CONTROL_TOKEN` is what authorizes the caller. Anyone on the tailnet who has the token can change the agent's model. Keep it per-agent, never commit it, rotate on leak or engineer offboarding (same discipline as the other secrets — add it to `docs/secrets-guide.md`'s rotation table mentally). On a Pattern B multi-agent project, each duplicated service needs its **own** token — a duplicated service inherits the original's, which must be overridden (same foot-gun shape as Risk 10's Slack tokens).
+- **A model change restarts the gateway.** `POST /model` with the default `restart: true` spawns `hermes gateway restart`, which re-execs the running gateway. That interrupts any in-flight Hermes session. It is the intended behavior (an operator changing the model expects it to take effect), but be aware a Roster-initiated model change is not free of blast radius — it is a gateway bounce.
+- **Silent disable if `gosu` disappears.** The sidecar runs as the `hermes` user via `gosu`. If a future upstream image drops `gosu`, `entrypoint.sh` **disables the sidecar** (with a warning in the startup logs) rather than running it as root. This is the correct fail-closed behavior, but the failure is only as visible as the startup logs are read — the symptom is "Roster can't reach the agent" with no other signal. If Roster reports an agent as uncontrollable, check the container's startup logs for the `gosu not found` warning. (Realistically `gosu` won't vanish — the upstream entrypoint depends on it too — but the dependency is worth knowing.)
+- **`config.yaml` write is single-writer by design (contract §6).** No file locking. A Railway redeploy landing in the microsecond window of a `save_config()` could in theory corrupt `config.yaml`. Accepted for v1: Roster is the only automated caller, the window is tiny, and `save_config()` is Hermes' own primitive. If `config.yaml` corruption is ever observed, this is the first place to look.
+- **`tailscale serve` config persists in tailnet state.** The serve mapping is stored in `tailscaled`'s state (on the volume at `/opt/data/.tailscale/`). `entrypoint.sh` re-asserts it on every boot, so it self-heals — but if an operator *changes* `ROSTER_CONTROL_PORT`, the serve mapping for the *old* port lingers until the volume's Tailscale state is reset. Low impact; note it if port changes ever cause confusion.
+
+Mitigation: the sidecar is opt-in (no token ⇒ it never runs), the surface is genuinely tiny (it cannot read secrets, open a shell, or touch sessions — unlike the full Hermes dashboard), and it shares the tailnet's existing trust boundary rather than adding a new one. The interface contract `docs/hermes-control-sidecar-contract.md` is the source of truth and is co-owned with the Roster repo — change it there first if the interface ever needs to move.
+
 ---
 
 ## Recommendations for Future Maintainers
@@ -149,6 +177,8 @@ The repo must remain public for the Railway deploy button to work. This means th
 Don't add services to the Railway project unless necessary. The current single-service design is a core property — it's what makes the multi-agent story work (each service is one tailnet node). Adding a second service per project would get us back into the subnet-router coordination problems we deliberately exited.
 
 If Hermes itself grows a sub-process requirement (e.g., a separate worker), prefer running it inside the same container via the same bash-backgrounding pattern. Reconsider the supervision story only if we hit actual operational pain.
+
+The Roster control sidecar (added 2026-05-14) is the first application of this guidance — it is a second backgrounded process inside the Hermes container, not a second Railway service, exactly as recommended above. That leaves us at two backgrounded secondaries (`tailscaled` + sidecar). A *third* would be the signal to revisit the "no s6-overlay" decision in ARCHITECTURE.md — not before.
 
 ---
 

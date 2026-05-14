@@ -67,9 +67,24 @@ RUN ln -sf /opt/hermes/.venv/bin/hermes /usr/local/bin/hermes
 COPY entrypoint.sh /usr/local/bin/rome-entrypoint.sh
 RUN chmod +x /usr/local/bin/rome-entrypoint.sh
 
+# ==================================================================
+# Roster control sidecar
+# ==================================================================
+# A tiny FastAPI service (see docs/hermes-control-sidecar-contract.md) that
+# lets Roster read and change this agent's LLM model over the tailnet. It runs
+# on the Hermes venv's Python — FastAPI, uvicorn, and PyYAML are already
+# installed there and it imports `hermes_cli.config` — so it adds no new pip
+# dependencies. entrypoint.sh starts it backgrounded (as the hermes user, only
+# when ROSTER_CONTROL_TOKEN is set) and exposes it on the tailnet via
+# `tailscale serve`.
+COPY roster-control-sidecar.py /usr/local/bin/roster-control-sidecar.py
+RUN chmod +x /usr/local/bin/roster-control-sidecar.py
+
 # No EXPOSE — this image serves no inbound connections.
 #   - Slack uses outbound-only Socket Mode
 #   - Tailscale SSH is reached via the tailnet, not a published port
+#   - The Roster control sidecar binds 127.0.0.1 only and is reached over the
+#     tailnet via `tailscale serve`, never via a published container port
 
 ENTRYPOINT ["/usr/local/bin/rome-entrypoint.sh"]
 CMD ["gateway", "run"]

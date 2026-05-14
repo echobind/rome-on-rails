@@ -105,6 +105,21 @@ The template does not enforce the "at least one provider key" rule at the UI lay
 
 The `SLACK_ALLOWED_USERS` prompt copy must explicitly call out the fail-closed behavior — operators who skip it typically see a non-responsive bot and assume the gateway is broken.
 
+#### Roster control sidecar (optional — enables remote model control)
+
+These two variables configure the **Roster control sidecar** — a tiny tailnet-only HTTP service that lets Roster (Echobind's agent control plane) read and change this agent's LLM model. The sidecar is **off by default**: with no token set, it does not start and the agent is simply not remotely controllable. Full interface contract: `docs/hermes-control-sidecar-contract.md`.
+
+| Variable | Prompt copy | Required? | Secret? |
+|---|---|---|---|
+| `ROSTER_CONTROL_TOKEN` | "Bearer token for the Roster control sidecar — the tailnet-only HTTP service that lets Roster read and change this agent's LLM model. When Roster provisions an agent it generates and injects this automatically; for a manual deploy, leave it blank. With no token the sidecar does not start and the agent is not remotely controllable — Slack and `tailscale ssh` are unaffected. Never reuse a token across agents." | No (required only to enable remote model control) | Yes |
+| `ROSTER_CONTROL_PORT` | "Port the control sidecar binds on `127.0.0.1` and is served on over the tailnet (the same number for both — Roster reaches it at `http://<TS_HOSTNAME>:<port>`). Defaults to `8765`. Only change it if `8765` collides with something else on the agent." | No (default `8765`) | No |
+
+Notes for a template maintainer:
+
+- Both variables are **optional prompts** — the template must still deploy cleanly with both left blank. The sidecar is an opt-in capability, not a requirement.
+- `ROSTER_CONTROL_TOKEN` is per-agent. On a Pattern B multi-agent project (duplicated services), each duplicated service must get its **own** token — do not let the duplicate inherit the original's. Treat it like the Slack tokens in `docs/multi-agent.md`.
+- There is intentionally no public-domain or `EXPOSE` change: the sidecar is reached only over the tailnet via `tailscale serve`, so the "no inbound ports" posture is unchanged.
+
 #### Must-not-set (deliberately excluded from template prompts)
 
 These variables exist in the Hermes ecosystem but must never be set in a rome-on-rails deployment.
@@ -160,3 +175,4 @@ If the template is lost and must be rebuilt from scratch, use this checklist:
 - `docs/secrets-guide.md` — full environment variable reference
 - `docs/multi-agent.md` — running multiple agents in one Railway project via service duplication
 - `docs/dashboard-access.md` — ad-hoc Hermes dashboard access over SSH local-forward
+- `docs/hermes-control-sidecar-contract.md` — interface contract for the Roster control sidecar (`ROSTER_CONTROL_TOKEN` / `ROSTER_CONTROL_PORT`)

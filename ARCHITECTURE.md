@@ -1,6 +1,6 @@
 # ARCHITECTURE.md — rome-on-rails
 
-## Last updated: 2026-04-24
+## Last updated: 2026-05-14
 
 ---
 
@@ -64,6 +64,8 @@ Per rome-on-rails deployment, the topology is one Railway project containing one
              ╳  No inbound ports exposed from the container
 ```
 
+**Not shown above: the optional Roster control sidecar.** When `ROSTER_CONTROL_TOKEN` is set, the Hermes Service container also runs a third process — a tiny FastAPI HTTP service bound to `127.0.0.1` — that lets Echobind's control plane (Roster) read and change the agent's LLM model over the tailnet. It is reached the same way maintainers reach the SSH server (through `tailscaled`, over the tailnet — never a public port), just over HTTP with a bearer token instead of SSH. See [The Roster Control Sidecar](#the-roster-control-sidecar) below.
+
 For multi-agent setups, replicate the entire right-hand side per agent — each Railway project runs its own Hermes service, each registers as a separate tailnet node with a unique hostname. Your laptop on the tailnet reaches each one independently.
 
 ---
@@ -87,7 +89,8 @@ For multi-agent setups, replicate the entire right-hand side per agent — each 
 **What runs in this container (as separate processes):**
 
 1. **tailscaled** — Tailscale daemon in userspace networking mode. Brought up by our `entrypoint.sh` before the upstream handoff. Registers the container as a tailnet node, accepts `tailscale ssh` inbound.
-2. **Hermes gateway** — Started by the upstream entrypoint (after privilege drop to hermes user). Connects outbound to Slack via Socket Mode. Runs cron scheduler. No HTTP server.
+2. **Hermes gateway** — Started by the upstream entrypoint (after privilege drop to hermes user). Connects outbound to Slack via Socket Mode. Runs cron scheduler. The gateway process itself serves no HTTP.
+3. **Roster control sidecar** *(optional)* — A small FastAPI/uvicorn HTTP service, started by our `entrypoint.sh` (backgrounded, as the hermes user via `gosu`) only when `ROSTER_CONTROL_TOKEN` is set. Binds `127.0.0.1` only; `entrypoint.sh` bridges it onto the tailnet with `tailscale serve`. Lets Roster read/change the agent's LLM model. See [The Roster Control Sidecar](#the-roster-control-sidecar).
 
 **What the container does NOT have:**
 
@@ -98,6 +101,35 @@ For multi-agent setups, replicate the entire right-hand side per agent — each 
 **Ad-hoc dashboard access:** When a maintainer wants the Hermes web dashboard, they open an SSH session with local-port forwarding (`ssh -L 9119:localhost:9119 hermes@<host>`) and run `hermes dashboard` inside. The dashboard binds only to the container's `localhost`, so it's unreachable from the tailnet unless the maintainer is actively tunneling to it. Closing the SSH session ends dashboard reachability. See `docs/dashboard-access.md`.
 
 **Version:** Pinned in the `Dockerfile` via the base-image tag — `FROM nousresearch/hermes-agent:<version>`. See [Version Pinning](#version-pinning) below.
+
+---
+
+## The Roster Control Sidecar
+
+The **Roster control sidecar** is an optional third process inside the Hermes Service container. It exists to solve one specific problem: the Hermes gateway reads its LLM model **only** from `/opt/data/config.yaml` (`model.provider` / `model.default`) — not from env vars — and Roster (Echobind's agent control plane) otherwise has no write path to that file. There is no exec-into-container, no Railway filesystem API, and the agent sits behind Tailscale.
+
+The sidecar is the minimum surface that closes that gap: a ~90-line FastAPI service with three endpoints, bearer-token auth, reachable only from the tailnet.
+
+**The authoritative interface specification is [`docs/hermes-control-sidecar-contract.md`](./docs/hermes-control-sidecar-contract.md)** — a shared contract co-owned with the Roster repo. This section records the *architecture* (how it fits the container); the contract records the *interface* (the wire behavior). If they conflict, the contract wins on interface questions and this document wins on container-architecture questions.
+
+| Property | Value |
+|---|---|
+| Code | `roster-control-sidecar.py` (repo root → `COPY`'d to `/usr/local/bin/`) |
+| Runtime | The Hermes venv's Python (`/opt/hermes/.venv`) — FastAPI, uvicorn, PyYAML are already there; no new pip dependencies |
+| Endpoints | `GET /healthz` (no auth), `GET /model` and `POST /model` (bearer auth) |
+| Bind address | `127.0.0.1:${ROSTER_CONTROL_PORT}` (default `8765`) — never `0.0.0.0` |
+| Tailnet exposure | `tailscale serve --bg --tcp=<port> tcp://127.0.0.1:<port>` — raw L4 forward, same port in and out, no TLS certs |
+| Process user | `hermes` (UID 10000), started via `gosu` from `entrypoint.sh` |
+| Started when | `ROSTER_CONTROL_TOKEN` is set **and** `gosu` is available — otherwise not started at all (fail-closed) |
+| Config primitive | `hermes_cli.config.load_config` / `save_config` — never hand-parses YAML |
+
+**Why it runs as the `hermes` user.** `config.yaml` is owned by `hermes` and is normally written by the gateway, the Hermes dashboard, and maintainers' `hermes config set` — all as `hermes`. If the sidecar wrote it as root, an atomic-rename in `save_config` could leave a root-owned `config.yaml` that later breaks those writers (the README warns maintainers about exactly this foot-gun). Running as `hermes` makes the sidecar's write indistinguishable from any other writer. `entrypoint.sh` backgrounds it via `gosu hermes` *before* the upstream entrypoint chowns `/opt/data` — which is safe because the sidecar's startup only binds a TCP port; it never touches `/opt/data` until a request arrives, long after boot.
+
+**Why fail-closed.** If `ROSTER_CONTROL_TOKEN` is unset, the sidecar does not start — an agent with no token is simply not remotely controllable, which is an acceptable state; a running-but-unauthenticated control surface is not. The same logic applies if `gosu` is somehow missing from the image: the sidecar is disabled (with a loud warning) rather than started as root. A silent privilege downgrade is worse than no remote control. In all of these cases the Hermes gateway is unaffected — it is a separate process.
+
+**Gateway restart on model change.** `POST /model` writes `config.yaml`, then (unless `restart: false`) spawns `hermes gateway restart` detached. In the pinned Hermes version that command signals the running gateway — located via `/opt/data/gateway.pid` — to re-exec itself in place. Because the gateway is PID 1, the container does not exit, and the sidecar (a sibling process backgrounded by `entrypoint.sh`) survives the restart. The HTTP response returns as soon as the restart is *spawned*, not when the gateway is back up.
+
+**What it deliberately does not do:** no model validation or listing (Roster owns the picker; OpenRouter validates at call time), no auxiliary model slots, no logs/status/config-dump endpoints, no public port. It is intentionally dumb: it writes what it's told, in the exact shape Hermes itself would.
 
 ---
 
@@ -127,6 +159,28 @@ Interactive shell as the `hermes` user
   ▼
 CLI commands execute against /opt/data state
 ```
+
+### Roster control-plane access (model read/write)
+
+```
+Roster (its own Railway service, on the same tailnet)
+  │
+  │  HTTP GET/POST http://<agent-hostname>:<ROSTER_CONTROL_PORT>/model
+  │  Authorization: Bearer <ROSTER_CONTROL_TOKEN>
+  │  WireGuard-encrypted tunnel via tailnet mesh
+  ▼
+Hermes container's tailscaled  →  `tailscale serve` TCP forward
+  │
+  │  bridges tailnet:<port> → 127.0.0.1:<port>
+  ▼
+Roster control sidecar (FastAPI, running as the hermes user)
+  │
+  │  constant-time bearer-token check; then load_config / save_config
+  ▼
+Reads or writes /opt/data/config.yaml  →  (on write) spawns `hermes gateway restart`
+```
+
+Same tailnet path as maintainer SSH — no public port, no inbound exposure. The difference is the protocol (HTTP + bearer token, not SSH + tailnet identity) and the actor (an automated control plane, not a human). Reachability is gated by **tailnet membership** (Roster's Railway service must be on the tailnet) and the **per-agent bearer token**.
 
 ### Slack user traffic (outbound-initiated, bidirectional)
 
@@ -158,7 +212,7 @@ All persistent data lives on a Railway volume mounted at `/opt/data` on the Herm
 
 | Path | Contents | Notes |
 |---|---|---|
-| `/opt/data/config.yaml` | Hermes configuration (model, tools, platform settings) | Written by Hermes on first boot from `cli-config.yaml.example` |
+| `/opt/data/config.yaml` | Hermes configuration (model, tools, platform settings) | Written by Hermes on first boot from `cli-config.yaml.example`. Also written by the Roster control sidecar on `POST /model` (as the `hermes` user, via Hermes' own `save_config`) |
 | `/opt/data/.env` | Hermes env file | Written on first boot. We don't use it on Railway — env vars come from the Railway dashboard. |
 | `/opt/data/sessions/` | Conversation history and session data | Survives redeploys |
 | `/opt/data/memories/` | Agent long-term memory | Survives redeploys |
@@ -188,7 +242,7 @@ The `entrypoint.sh` script reads them from the environment at startup and uses t
 
 ## Access Control
 
-rome-on-rails serves two distinct user types, each gated by a different mechanism.
+rome-on-rails serves distinct actors, each gated by a different mechanism: two human user types (maintainers, Slack users) and — when the control sidecar is enabled — one automated actor (Roster).
 
 ### Maintainers (admin / CLI access)
 
@@ -206,6 +260,15 @@ Interact with Hermes by mentioning the bot or DMing it in Slack. They never touc
 - **`SLACK_ALLOWED_USERS`** — the inner ring. A comma-separated list of Slack member IDs, set as a Railway environment variable. This is the *only* per-user allowlist Hermes exposes for Slack; when unset, the gateway denies all messages (verified 2026-04-23 against pinned version v2026.4.16 — see `HANDOFF.md` Risk 7). A deploy where the bot appears online but does not respond is almost always a missing or incorrect `SLACK_ALLOWED_USERS`. An unsafe master override exists (`GATEWAY_ALLOW_ALL_USERS=true`) that disables all allowlists gateway-wide; **do not set it** — listed in `docs/secrets-guide.md` under variables you must not set.
 
 **Implication for operators:** `SLACK_ALLOWED_USERS` must be set during first deploy and updated whenever team membership changes (e.g., offboarding). There is no Hermes-side UI for managing it.
+
+### Roster (automated control-plane access)
+
+When the control sidecar is enabled, Roster can read and change the agent's LLM model via the sidecar's HTTP API. This access is bounded by:
+
+- **Tailnet membership** — the sidecar is only reachable from the tailnet (exposed via `tailscale serve`, never a public port). Roster's own Railway service must be a tailnet node to reach it at all.
+- **`ROSTER_CONTROL_TOKEN`** — a per-agent bearer token, checked with a constant-time comparison on every authenticated route. Roster mints it, stores it encrypted, and injects it as a Railway env var at provisioning time. If it is unset, the sidecar does not run — the agent is not remotely controllable, which is a safe default.
+
+Roster's reach is deliberately narrow: the **only** thing it can do through this surface is read/write the main model slot and trigger a gateway restart. It cannot read secrets, open a shell, or touch session data — the sidecar exposes nothing else. This is a smaller surface than the full Hermes dashboard (which `rome-on-rails` does not run as an always-on service).
 
 ---
 
@@ -245,18 +308,68 @@ The current pinned version is the literal tag in the `Dockerfile`. To upgrade:
 | `echobind/rome-on-rails` repo | Yes | The template is public so Railway's deploy button works |
 | Dockerfile | Yes | Contains no secrets; only the pinned Hermes version |
 | `entrypoint.sh` | Yes | Contains no secrets; reads from env at runtime |
+| `roster-control-sidecar.py` | Yes | Contains no secrets; reads `ROSTER_CONTROL_TOKEN` from env at runtime |
 | Railway environment variables | No | Set in Railway dashboard, never in the repo |
 | Hermes agent (Slack endpoint) | No | No public domain; only reachable via Slack's own infrastructure (outbound-only connection from the bot) |
 | Hermes CLI / shell access | No | Only reachable via `tailscale ssh` through the tailnet |
+| Roster control sidecar (HTTP endpoint) | No | Binds `127.0.0.1` only; reachable from the tailnet via `tailscale serve`, never a public port; gated by a bearer token |
 | Volume contents (sessions, memory, tailnet identity) | No | Stored in Railway's infrastructure |
 | Tailscale auth key (`TS_AUTHKEY`) | No | Railway environment variable |
 | LLM provider keys, Slack tokens | No | Railway environment variables |
+| Roster control token (`ROSTER_CONTROL_TOKEN`) | No | Railway environment variable; per-agent |
 
 ---
 
 ## Decisions Log
 
 This section records significant architecture decisions, when they were made, and why. New decisions are added at the top.
+
+---
+
+### 2026-05-14 — Add an optional Roster control sidecar for remote model control
+
+**Decision:** Add a third, optional process to the Hermes Service container — a ~90-line FastAPI HTTP service (`roster-control-sidecar.py`) that lets Roster read and change the agent's LLM model over the tailnet. It implements `GET /healthz`, `GET /model`, `POST /model` exactly per the shared contract at `docs/hermes-control-sidecar-contract.md`. It is **off unless `ROSTER_CONTROL_TOKEN` is set**.
+
+**Rationale:** The Hermes gateway resolves its LLM model only from `config.yaml`, not from env vars (verified against upstream `gateway/run.py:_resolve_gateway_model`). Roster has no other write path to that file — no exec-into-container, no Railway filesystem API, and the agent is behind Tailscale. The sidecar is the minimum surface that closes the gap: two functional endpoints, bearer-token auth, tailnet-only. It deliberately does not reuse the full Hermes dashboard (which also exposes API-key reveal, a PTY shell, and session data).
+
+**Sub-decisions and their rationale:**
+
+- **Runs as the `hermes` user (via `gosu`), not root.** The sidecar writes `config.yaml` and spawns `hermes gateway restart` — both operations the gateway, dashboard, and maintainers all perform as `hermes`. A root-run sidecar risks leaving a root-owned `config.yaml` (if `save_config` does atomic temp-file + rename), which then breaks the other writers — the exact foot-gun the README warns maintainers about. Running as `hermes` makes the write indistinguishable from any other writer. *(Consulted a DevOps specialist on this specific question; the privilege-symmetry and least-privilege arguments both pointed the same way.)*
+- **Fail-closed, with no root fallback.** No `ROSTER_CONTROL_TOKEN` ⇒ the sidecar does not start (a half-open control surface is worse than none). If `gosu` is somehow missing from the upstream image ⇒ the sidecar is **disabled with a loud warning**, not started as root — a silent privilege downgrade is a latent incident; a loud failure is debuggable. In every disabled case the Hermes gateway is unaffected.
+- **Tailnet exposure via `tailscale serve --bg --tcp`, same port both sides.** Raw L4 forwarding (`tcp://127.0.0.1:<port>`), so the sidecar is reachable at exactly `http://<tsHostname>:<port>` with no port translation. Chosen over `tailscale serve --http` (an unnecessary L7 proxy) and HTTPS serve (needs cert provisioning; the tailnet already encrypts end-to-end). Verified: raw `--tcp` needs no HTTPS/cert setup.
+- **Framework: FastAPI + uvicorn**, already in the Hermes venv — zero new pip dependencies. The sidecar runs on the venv's Python so it can `import hermes_cli.config` and reuse `load_config` / `save_config` rather than hand-parsing YAML.
+- **Restart via `hermes gateway restart`** (no flags), spawned detached. Verified against the pinned `v2026.4.16` image by tracing `hermes_cli/gateway.py`: the bare form targets the running foreground gateway (located via `/opt/data/gateway.pid`), not the systemd unit (`--system` is the opt-in for that), and triggers an in-place self-re-exec — so the container does not exit and the sidecar survives.
+
+**Impact on process supervision:** the container now has up to three processes — the Hermes gateway (PID 1, primary) plus two backgrounded secondaries (`tailscaled`, and the sidecar when enabled). The bash-backgrounding model still holds (see the 2026-04-24 process-supervision decision, now annotated). The sidecar is backgrounded by our `entrypoint.sh` before the upstream `exec`, making it a sibling of the gateway — it is unaffected by a `hermes gateway restart`, which re-execs the gateway in place.
+
+**No change to the public posture:** the sidecar binds `127.0.0.1` only; the Dockerfile still has no `EXPOSE`; no Railway domain is generated. Reachability is tailnet + bearer token, exactly the same network posture as `tailscale ssh`.
+
+**Validated:** Image builds; verified in-container that FastAPI/uvicorn/PyYAML are in the venv, `hermes_cli.config` imports, `gosu` and the `hermes` user are present, and `hermes gateway restart` resolves to the foreground-gateway path. Full end-to-end test (real `tailscale serve` + a `POST /model` round-trip) is part of the local smoke test, which needs a real `TS_AUTHKEY`.
+
+---
+
+### 2026-04-29 — Webhooks from day one for control-plane status updates, with manual per-tenant URL configuration
+
+**Decision:** The control-plane frontend that operates rome-on-rails deployments uses Railway webhooks (one per tenant project) to receive deployment status events. Each tenant gets a unique receiver URL of the shape `https://<control-plane>/api/webhooks/railway/<token>`, where `<token>` is a 128-bit random value generated server-side at tenant-creation time. The webhook URL is configured manually in the Railway dashboard (Project Settings → Webhooks) by an operator at tenant onboarding time. Operator runbook: `docs/webhook-setup.md`.
+
+**Rationale:** Webhooks are the right shape for a multi-tenant ops dashboard — once the receiver is built, it scales to N tenants with no per-tenant runtime cost, and gives sub-second status latency to the UI. Polling was considered (the same query in `docs/POSTMAN-API-TESTS.md` Phase 2.2 already returns deployment status) but rejected: polling cost grows linearly with active deploys, and "did my deploy succeed?" feedback latency is bounded by the polling interval rather than network speed.
+
+**Per-tenant URLs (rather than one shared receiver) chosen because:**
+
+- Tenant isolation is structural, not handler-dependent — a payload-routing bug can't cross tenants.
+- Easier rotation: regenerate one tenant's token, push the new URL to Railway for that one project, the old URL 404s — no impact on other tenants.
+- The URL itself acts as the shared secret. Sufficient given Railway exposes no documented HMAC; mitigated by treating logs containing the token as sensitive.
+
+**Manual setup step accepted as a tradeoff:** Railway's GraphQL API exposes webhook *testing* (`webhookTest` mutation, useful for dev) but **not** webhook *creation/update/deletion* — verified 2026-04-29 against the live schema introspected with a workspace token. The Postman collection at `docs/railway_graphql_collection.json` includes `webhookCreate`/`webhookUpdate`/`webhookDelete` request templates, but those mutations do not exist in the live schema; treat that collection as suggestive only and verify against introspection. An operator must paste the URL into Railway's dashboard once per tenant.
+
+**Mitigations for the manual step:**
+
+- Clear operator runbook at `docs/webhook-setup.md`.
+- A "Test webhook delivery" affordance in the control-plane UI that uses `webhookTest` to verify the round-trip end-to-end.
+- A "webhook configured?" indicator on each tenant detail page that turns green permanently after the first real webhook arrives.
+- A scheduled health check that alerts when any tenant has had >0 deployments but never received a webhook event (catches "operator pasted the wrong URL" too).
+
+**Scope note:** the receiver implementation lives in the control-plane frontend codebase, not in this repo. This decision is recorded here because the operational story for any rome-on-rails deployment now includes a documented webhook-setup step that operators need to follow, and a known risk (`HANDOFF.md` Risk 11) if they skip it. If Railway ever adds programmatic webhook configuration, the manual step retires automatically.
 
 ---
 
@@ -365,6 +478,8 @@ s6-overlay or supervisord would provide symmetric supervision (restart each proc
 
 - No zombie reaping if tailscaled dies after upstream `exec` (Hermes becomes PID 1, doesn't reap children). Bounded impact — one zombie slot in the process table.
 - No automatic restart of tailscaled.
+
+**Update 2026-05-14:** The optional Roster control sidecar adds a *second* backgrounded process (see the 2026-05-14 decision above). The asymmetric model still holds — the sidecar is another non-critical secondary; if it dies, the gateway keeps running and only Roster's remote model control is lost. The zombie-slot limitation is now bounded at *two* slots instead of one. This is still comfortably within "simple pattern is fine" territory; the trigger to revisit s6-overlay/supervisord remains a *third* backgrounded process or recurring operational pain, neither of which we have.
 
 ---
 
