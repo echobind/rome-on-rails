@@ -21,7 +21,7 @@ Before you deploy, you need:
 
 ## Deploy
 
-[![Deploy on Railway](https://railway.com/button.svg)](https://railway.com/deploy/NBsSYG?utm_medium=integration&utm_source=template&utm_campaign=generic)
+[![Deploy on Railway](https://railway.com/button.svg)](https://railway.com/deploy/hermes-gateway-via-tailscale?utm_medium=integration&utm_source=template&utm_campaign=generic)
 
 Clicking this button will:
 1. Ask you to connect your GitHub account if you haven't already
@@ -57,7 +57,7 @@ Set the API key for whichever provider you want Hermes to use. OpenRouter is rec
 | `GOOGLE_API_KEY` | If using Google Gemini directly | Key from Google AI Studio |
 | `HERMES_INFERENCE_PROVIDER` | Optional | Explicitly selects the provider (`openrouter`, `anthropic`, `openai`, `google`). Defaults to `auto`. |
 
-The specific model to use is set from inside the container after first boot, via `tailscale ssh hermes@<hostname>` → `hermes model` (or `hermes config edit`). Hermes writes your choice to `/opt/data/config.yaml` on the persistent volume.
+The specific model to use is set from inside the container after first boot, via `tailscale ssh hermes@<hostname>` → `hermes model` (or `hermes config edit`). Hermes writes your choice to `/opt/data/config.yaml` on the persistent volume. (If you've enabled the Roster control sidecar — see below — Roster can also read and change the model remotely; it writes the same file the same way.)
 
 ### Slack gateway (required for Slack)
 
@@ -68,6 +68,17 @@ The specific model to use is set from inside the container after first boot, via
 | `SLACK_ALLOWED_USERS` | **Yes, for Slack to function** | Comma-separated Slack member IDs, e.g., `U01234ABCDE,U05678FGHIJ`. If unset, the Hermes gateway denies all messages and the bot appears online but silent. See `HANDOFF.md` Risk 7. |
 
 If Slack tokens are absent, the container still starts (Slack just doesn't connect) and the entrypoint logs a warning. If `SLACK_ALLOWED_USERS` is absent, Hermes itself emits a warning and rejects all messages — the bot appears online but unresponsive.
+
+### Roster control sidecar (optional)
+
+These enable the **Roster control sidecar** — a tailnet-only HTTP service that lets Echobind's agent control plane (Roster) read and change this agent's LLM model remotely. If you're deploying by hand, you can ignore both: leave `ROSTER_CONTROL_TOKEN` unset and the sidecar simply doesn't start. When Roster provisions an agent, it sets these automatically.
+
+| Variable | Required | Description |
+|---|---|---|
+| `ROSTER_CONTROL_TOKEN` | No | Bearer token for the control sidecar. **Unset ⇒ the sidecar does not start** and the agent is not remotely controllable (Slack and `tailscale ssh` are unaffected). Set per-agent — never reuse a token across agents. Treat as a secret. |
+| `ROSTER_CONTROL_PORT` | No | Port the sidecar binds on `127.0.0.1` and is served on over the tailnet. Defaults to `8765`. Only change it if `8765` collides with something else on the agent. |
+
+The sidecar adds **no public network surface** — it binds `127.0.0.1` and is reached only over the tailnet (via `tailscale serve`), exactly like `tailscale ssh`. Full interface details: [docs/hermes-control-sidecar-contract.md](./docs/hermes-control-sidecar-contract.md).
 
 ### Other env vars you should *not* need to set
 
@@ -176,8 +187,10 @@ Review any changes before merging — particularly changes to the `Dockerfile` (
 | This repository | Public | Required for Railway deploy button |
 | `Dockerfile` | Public | No secrets — only the pinned Hermes version |
 | `entrypoint.sh` | Public | Reads secrets from env at runtime |
+| `roster-control-sidecar.py` | Public | No secrets — reads its bearer token from env at runtime |
 | Railway environment variables | Private | Set in Railway dashboard only |
-| The Hermes container itself | Private | No public URL; only reachable via `tailscale ssh` or outbound Slack WebSocket |
+| The Hermes container itself | Private | No public URL; only reachable via `tailscale ssh`, outbound Slack WebSocket, or — if enabled — the control sidecar over the tailnet |
+| Roster control sidecar endpoint | Private | Binds `127.0.0.1`; reachable only over the tailnet via `tailscale serve`, gated by a bearer token |
 | Volume contents | Private | Stored in Railway infrastructure |
 
 ---
@@ -188,9 +201,10 @@ The template is designed to make accidental exposure structurally difficult, but
 
 1. **Never generate a public Railway domain for the service.** The Dockerfile has no `EXPOSE` directive, so generating a domain today is a no-op. Don't rely on that — adding an HTTP server in the future would change the equation.
 2. **Never commit API keys or bot tokens.** All secrets live in Railway environment variables. The `.gitignore` in this repo blocks common secret file patterns, but always double-check before pushing.
-3. **Don't enable Tailscale Funnel** on your agent's tailnet node. Funnel is a Tailscale feature that exposes a tailnet service to the public internet. This template deploys without Funnel and you should keep it that way.
-4. **Review the Tailscale ACL before adding team members.** Your Tailscale ACL controls who on your tailnet can `tailscale ssh` where. Ensure only authorized engineers can reach agent nodes.
+3. **Don't enable Tailscale Funnel** on your agent's tailnet node. Funnel is a Tailscale feature that exposes a tailnet service to the public internet. This template deploys without Funnel and you should keep it that way. This matters more if you've enabled the Roster control sidecar — that *is* a real HTTP service, and the tailnet (plus its bearer token) is the only thing keeping it private. Funnel would undo that.
+4. **Review the Tailscale ACL before adding team members.** Your Tailscale ACL controls who on your tailnet can `tailscale ssh` where — and, if the control sidecar is enabled, who can reach it. Ensure only authorized engineers and services can reach agent nodes.
 5. **Don't set `GATEWAY_ALLOW_ALL_USERS=true`.** This Hermes env var disables all per-platform allowlists and turns the bot into open-access. See `docs/secrets-guide.md` and `HANDOFF.md` Risk 7.
+6. **Keep `ROSTER_CONTROL_TOKEN` per-agent and secret.** If you use the Roster control sidecar, its bearer token is the authorization layer for remotely changing the agent's model. Never reuse one token across agents, never commit it, and rotate it if it leaks. Unset it entirely and the sidecar won't even start.
 
 ---
 

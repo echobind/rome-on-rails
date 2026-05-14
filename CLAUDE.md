@@ -52,12 +52,14 @@ rome-on-rails/
 ├── ARCHITECTURE.md        ← authoritative technical reference
 ├── HANDOFF.md             ← risks and maintainer notes
 ├── Dockerfile             ← builds the Hermes container (with Tailscale); pins version
-├── entrypoint.sh          ← startup script; starts tailscaled then execs upstream entrypoint
+├── entrypoint.sh          ← startup script; starts tailscaled + control sidecar, then execs upstream entrypoint
+├── roster-control-sidecar.py ← optional FastAPI service for remote LLM-model control by Roster
 ├── railway/
 │   └── template-notes.md  ← documents Railway UI config (can't be in-repo)
 └── docs/
     ├── tailscale-setup.md ← Tailscale operational guide
-    └── secrets-guide.md   ← environment variable reference
+    ├── secrets-guide.md   ← environment variable reference
+    └── hermes-control-sidecar-contract.md ← shared interface contract for the control sidecar (co-owned with Roster)
 ```
 
 ## Key Technical Decisions (do not revisit without good reason)
@@ -73,6 +75,7 @@ rome-on-rails/
 - **Secrets:** Railway environment variables only — never in the volume or repo.
 - **No public URL, no inbound ports:** Hermes deployed as worker type; Dockerfile has no `EXPOSE` directive.
 - **`hermes` CLI symlink:** `/usr/local/bin/hermes` → `/opt/hermes/.venv/bin/hermes` so the CLI is reachable from any interactive shell on `tailscale ssh`.
+- **Roster control sidecar (optional):** a tiny FastAPI service (`roster-control-sidecar.py`) that lets Roster read/change the agent's LLM model over the tailnet. Backgrounded by `entrypoint.sh` as the `hermes` user via `gosu`, **only** when `ROSTER_CONTROL_TOKEN` is set (fail-closed — no token, or no `gosu`, means it doesn't run; never falls back to root). Binds `127.0.0.1`, exposed to the tailnet via `tailscale serve --tcp`. No new pip deps (FastAPI/uvicorn/PyYAML already in the venv). The interface is governed by `docs/hermes-control-sidecar-contract.md`, a contract co-owned with the Roster repo — change that file first if the interface must move.
 
 Full rationale in `ARCHITECTURE.md`.
 

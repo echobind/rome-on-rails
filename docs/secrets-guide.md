@@ -9,7 +9,7 @@ Complete reference for environment variables in rome-on-rails. The [README](../R
 | Location | What lives there | Why |
 |---|---|---|
 | Railway environment variables | All API keys, bot tokens, auth keys | Injected into the container at runtime; never written to the volume, never in the repo |
-| `/opt/data/config.yaml` on the volume | Non-secret Hermes configuration (which model, which tools, which platforms enabled) | Written by Hermes itself on first boot; survives redeploys |
+| `/opt/data/config.yaml` on the volume | Non-secret Hermes configuration (which model, which tools, which platforms enabled) | Written by Hermes itself on first boot; survives redeploys. Also written by the Roster control sidecar on `POST /model`, if that sidecar is enabled |
 | `/opt/data/.tailscale/` on the volume | Tailscale machine identity (node key, SSH host keys) | Written by tailscaled; survives redeploys. Not strictly a "secret" but compromise would let an attacker impersonate the agent on your tailnet — revoke the machine in Tailscale admin if the volume is ever exposed. |
 | The git repo | Nothing secret. Ever. | Public repository; required for the Railway deploy button |
 
@@ -54,6 +54,17 @@ At least one provider key must be set. Hermes's `HERMES_INFERENCE_PROVIDER` defa
 **Getting a Slack member ID:** in Slack, click a user's profile → three-dot menu → "Copy member ID". The format is `U` followed by 10 alphanumeric characters. Member IDs are stable; they don't change if the user renames themselves.
 
 **Bot display name:** The bot's name and icon in Slack come from the Slack app's configuration, not from any env var here. If you want multiple agents with different names in the same Slack workspace, create a Slack app per agent (separate name, icon, and tokens).
+
+### Roster control sidecar
+
+These configure the optional **Roster control sidecar** — a tailnet-only HTTP service that lets Echobind's agent control plane (Roster) read and change this agent's LLM model. Off by default; full interface contract in `docs/hermes-control-sidecar-contract.md`.
+
+| Variable | Required | Description |
+|---|---|---|
+| `ROSTER_CONTROL_TOKEN` | No (required only to enable the sidecar) | Bearer token the sidecar checks (constant-time) on every authenticated request. **Unset ⇒ the sidecar does not start** — the agent is simply not remotely controllable, which is a safe default; Slack and `tailscale ssh` are unaffected. Per-agent secret: Roster mints it, stores it encrypted, and injects it as a Railway env var. Never reuse a token across agents. |
+| `ROSTER_CONTROL_PORT` | No (defaults to `8765`) | Port the sidecar binds on `127.0.0.1` and is served on over the tailnet (`tailscale serve --tcp`, same number both sides). Only change it if `8765` collides with something else on the agent. Not a secret. |
+
+**Why this is a secret and the model isn't:** `ROSTER_CONTROL_TOKEN` is the *authorization* for changing the model remotely — it belongs in the same bucket as the Slack tokens and LLM keys. The model *value* itself (e.g. `anthropic/claude-opus-4.7`) is non-secret config and lives in `/opt/data/config.yaml`, exactly as described in the LLM-provider note above. The sidecar is just a remote, authenticated write path to that file.
 
 ### Other gateways (optional)
 
@@ -106,6 +117,7 @@ If you find yourself wanting to override one of these, the right answer is almos
 | `SLACK_BOT_TOKEN` / `SLACK_APP_TOKEN` | App compromise, team member who had admin access to the Slack app leaves | Rotated via the Slack app's admin UI. |
 | LLM provider keys | Suspected leak, engineer offboarding if the engineer had Railway access to this project | Most providers (OpenRouter, Anthropic, OpenAI) let you revoke and replace a key without downtime. |
 | `SLACK_ALLOWED_USERS` | Every time team membership changes | Not a secret, but this is the access-control surface. Treat updates as a standard onboarding/offboarding step. |
+| `ROSTER_CONTROL_TOKEN` | Suspected leak, engineer offboarding if the engineer had Railway access to this project | Normally Roster-managed — rotate via Roster, which re-injects the new value as a Railway env var and triggers a redeploy. For a manually-deployed agent, generate a new random token and update it in Railway. Rotating it doesn't disrupt Slack or `tailscale ssh`. |
 
 ### Rotation procedure (generic)
 
@@ -139,6 +151,9 @@ Anyone with Railway project access can view every env var in the dashboard. Limi
 ### Mistake: setting `TS_AUTHKEY` in `TS_EXTRA_ARGS`
 The entrypoint already passes `--authkey=$TS_AUTHKEY` to `tailscale up`. Setting it again in `TS_EXTRA_ARGS` causes a duplicate-flag error. `TS_EXTRA_ARGS` is for *additional* flags — things like `--advertise-tags=...`.
 
+### Mistake: reusing one `ROSTER_CONTROL_TOKEN` across multiple agents
+The control token is the per-agent authorization for changing that agent's model. A shared token means anyone who can reach one agent's sidecar can control every agent that shares the token. Mint a fresh token per agent — and on a Pattern B multi-agent project, remember a duplicated service inherits the original's token and must have it overridden (same shape as the Slack-token foot-gun in Risk 10).
+
 ---
 
 ## See also
@@ -146,5 +161,6 @@ The entrypoint already passes `--authkey=$TS_AUTHKEY` to `tailscale up`. Setting
 - `README.md` — minimum env vars to deploy
 - `ARCHITECTURE.md` — Secrets Management section, Access Control section, Decision Log entries
 - `docs/tailscale-setup.md` — full Tailscale operational guide
-- `HANDOFF.md` — Risks 2, 5, 7, 8 all touch on secrets / access control
+- `docs/hermes-control-sidecar-contract.md` — interface contract for the Roster control sidecar (`ROSTER_CONTROL_TOKEN` / `ROSTER_CONTROL_PORT`)
+- `HANDOFF.md` — Risks 2, 5, 7, 8 touch on secrets / access control; Risk 12 covers the control sidecar
 - [Upstream Hermes environment variables reference](https://github.com/NousResearch/hermes-agent/blob/main/website/docs/reference/environment-variables.md)

@@ -32,6 +32,8 @@ UPSTREAM_ENTRYPOINT="/opt/hermes/docker/entrypoint.sh"
 HERMES_HOME_DEFAULT="/opt/data"
 TS_STATE_DIR="${HERMES_HOME:-$HERMES_HOME_DEFAULT}/.tailscale"
 TS_SOCKET="/var/run/tailscale/tailscaled.sock"
+VENV_PYTHON="/opt/hermes/.venv/bin/python"
+CONTROL_SIDECAR="/usr/local/bin/roster-control-sidecar.py"
 
 log()  { echo "[rome-on-rails] $*"; }
 warn() { echo "[rome-on-rails][warn] $*" >&2; }
@@ -75,6 +77,10 @@ fi
 # ==================================================================
 # Tailscale — start tailscaled, bring the node up, enable SSH
 # ==================================================================
+# TAILSCALE_UP flips to 1 only after a successful `tailscale up`. The Roster
+# control sidecar section below reads it to decide whether the sidecar can be
+# exposed on the tailnet.
+TAILSCALE_UP=0
 if [ -z "${TS_AUTHKEY:-}" ]; then
   warn "TS_AUTHKEY is not set."
   warn "  Tailscale will not connect. Hermes will still run (Slack works via outbound Socket Mode),"
@@ -143,10 +149,74 @@ else
 
   if tailscale --socket="$TS_SOCKET" up "${TS_UP_ARGS[@]}"; then
     log "  Tailscale connected; SSH enabled"
+    TAILSCALE_UP=1
   else
     warn "  Tailscale 'up' failed. Container will continue without tailnet access."
     warn "  Common causes: TS_AUTHKEY expired, revoked, or not marked reusable. See docs/tailscale-setup.md."
   fi
+fi
+
+# ==================================================================
+# Roster control sidecar — optional remote model-control HTTP service
+# ==================================================================
+# A tiny FastAPI service (docs/hermes-control-sidecar-contract.md) that lets
+# Roster read and change this agent's LLM model over the tailnet. Design notes:
+#
+#   - Fail-closed: it starts only when ROSTER_CONTROL_TOKEN is set. No token
+#     means the agent simply isn't remotely controllable — an acceptable state;
+#     a half-open control surface is not. (The sidecar re-checks this itself.)
+#   - Runs as the `hermes` user via gosu, so it reads/writes config.yaml and
+#     runs `hermes gateway restart` as the same user the gateway itself runs
+#     as — no root-owned files left behind in /opt/data. If gosu is somehow
+#     unavailable we DISABLE the sidecar rather than run it as root: a silent
+#     privilege downgrade is worse than no remote control.
+#   - Backgrounded here (before the upstream exec), the same pattern as
+#     tailscaled, so it is a sibling of the gateway process and survives a
+#     `hermes gateway restart` (which re-execs the gateway in place).
+#   - Binds 127.0.0.1 only; we bridge it onto the tailnet with `tailscale
+#     serve --tcp` (raw L4 forward, same port in and out, no TLS certs needed).
+#     If tailscaled isn't up, the sidecar still runs locally but isn't
+#     reachable from the tailnet — logged, not fatal.
+if [ -n "${ROSTER_CONTROL_TOKEN:-}" ]; then
+  CONTROL_PORT="${ROSTER_CONTROL_PORT:-8765}"
+
+  if command -v gosu >/dev/null 2>&1; then
+    log "Starting Roster control sidecar on 127.0.0.1:${CONTROL_PORT} (as hermes)..."
+    gosu hermes "$VENV_PYTHON" "$CONTROL_SIDECAR" &
+    SIDECAR_PID=$!
+
+    # Wait for uvicorn to bind, so the log line below is truthful and
+    # `tailscale serve` has a live backend to point at. Same idiom as the
+    # tailscaled-socket wait above; bash's /dev/tcp does the TCP connect.
+    for _ in $(seq 1 50); do
+      if (: < "/dev/tcp/127.0.0.1/${CONTROL_PORT}") 2>/dev/null; then
+        break
+      fi
+      sleep 0.1
+    done
+
+    if [ "$TAILSCALE_UP" = "1" ]; then
+      log "  Exposing sidecar on the tailnet: tailscale serve --bg --tcp=${CONTROL_PORT}"
+      if tailscale --socket="$TS_SOCKET" serve --bg \
+           --tcp="$CONTROL_PORT" "tcp://127.0.0.1:${CONTROL_PORT}"; then
+        log "  Control sidecar reachable from the tailnet at http://${TAILNET_HOSTNAME}:${CONTROL_PORT}"
+      else
+        warn "  'tailscale serve' failed — the sidecar is running on 127.0.0.1 but is"
+        warn "  NOT reachable from the tailnet. Roster cannot control this agent."
+      fi
+    else
+      warn "  Tailscale is not up — the sidecar runs locally but is NOT reachable from"
+      warn "  the tailnet. Roster cannot control this agent until Tailscale connects."
+    fi
+  else
+    warn "Roster control sidecar: gosu not found — cannot drop the sidecar to the"
+    warn "  hermes user, so it will NOT be started (running it as root would leave"
+    warn "  root-owned files in /opt/data). The Hermes gateway is unaffected; only"
+    warn "  Roster's remote model control is disabled. This points to an unexpected"
+    warn "  change in the upstream image — investigate before relying on remote control."
+  fi
+else
+  log "ROSTER_CONTROL_TOKEN not set — Roster control sidecar disabled (agent not remotely controllable)."
 fi
 
 # ==================================================================
