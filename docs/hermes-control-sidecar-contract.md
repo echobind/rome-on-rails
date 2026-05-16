@@ -1,6 +1,6 @@
 # Hermes Control Sidecar — Interface Contract
 
-**Status:** Draft v1 · 2026-05-14
+**Status:** Draft v1 · 2026-05-15
 **Owners:** Roster (`echobind/agent-org-chart`) ↔ rome-on-rails (`echobind/rome-on-rails`)
 
 This document is the **shared source of truth** for the "control sidecar" — a tiny
@@ -50,8 +50,11 @@ session data, etc.).
   wide gains nothing and only widens exposure).
 - rome-on-rails is responsible for **exposing it on the tailnet** (see §8) so other
   tailnet nodes can reach it as `http://<tsHostname>:<port>`.
-- Transport is **plain HTTP**. The tailnet already encrypts everything end-to-end
-  (WireGuard); the bearer token is the authorization layer. No TLS cert wrangling.
+- Transport is **plain HTTP** — exposed via `tailscale serve --http`, not `--tcp`
+  (which terminates TLS at the tailnet edge using the MagicDNS cert and forces
+  clients into `.ts.net` FQDNs or cert-verification opt-outs). The tailnet
+  already encrypts everything end-to-end (WireGuard); the bearer token is the
+  authorization layer. No TLS cert wrangling, no client-side workarounds.
 
 ---
 
@@ -251,22 +254,31 @@ actually take effect.
 `nousresearch/hermes-agent:v2026.4.16`). Recorded here so Roster builds against
 the same choices.
 
-1. **Tailnet exposure mechanism — `tailscale serve --bg --tcp`, same port both
+1. **Tailnet exposure mechanism — `tailscale serve --bg --http`, same port both
    sides.** `entrypoint.sh` runs:
 
    ```
-   tailscale serve --bg --tcp=<ROSTER_CONTROL_PORT> tcp://127.0.0.1:<ROSTER_CONTROL_PORT>
+   tailscale serve --bg --http=<ROSTER_CONTROL_PORT> http://127.0.0.1:<ROSTER_CONTROL_PORT>
    ```
 
-   Raw L4 TCP forwarding: the tailnet-facing port equals the local bind port, so
+   Plain HTTP forwarding: the tailnet-facing port equals the local bind port, so
    the sidecar is reachable at exactly `http://<tsHostname>:<ROSTER_CONTROL_PORT>`
-   with no port translation for Roster to track. Chosen over `tailscale serve
-   --http` (an unnecessary L7 reverse proxy — there is one backend on a dedicated
-   port and no host/path routing is needed) and over HTTPS serve (would require
-   cert provisioning and contradicts §2's "plain HTTP over the already-encrypted
-   tailnet"). Raw `--tcp` needs no HTTPS/cert setup and is reachable by other
-   tailnet nodes by default. **Roster: keep using one port number for both the
-   local bind and the tailnet address.**
+   with no port translation for Roster to track. **Roster: keep using one port
+   number for both the local bind and the tailnet address.**
+
+   **Revised 2026-05-15** (was `--tcp`, see issue #6): `--tcp` is documented as
+   "raw TCP" but in practice `tailscale serve --tcp=<port>` terminates TLS at the
+   tailnet edge using the node's MagicDNS certificate. Clients connecting to
+   `http://<tsHostname>:<port>` get a TLS handshake instead, and the only way to
+   reach the sidecar is either the `.ts.net` FQDN with cert verification, or
+   disabling cert verification client-side — both of which contradict §2's "plain
+   HTTP over the already-encrypted tailnet" promise and force Roster into
+   per-environment URL/verify workarounds. `--http` is the correct knob: it
+   exposes the backend as actual HTTP on the tailnet, no TLS termination, no cert
+   provisioning. WireGuard still encrypts the tailnet hop end-to-end, and the
+   bearer token still authenticates the caller. Also rejected: `tailscale serve
+   --https` (would require cert provisioning and re-introduces the same FQDN
+   constraint we are trying to escape).
 
 2. **Sidecar framework — FastAPI + uvicorn.** Both are already in the Hermes venv
    (`/opt/hermes/.venv` — verified: FastAPI 0.136.0, uvicorn 0.44.0, PyYAML

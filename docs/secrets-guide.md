@@ -62,7 +62,7 @@ These configure the optional **Roster control sidecar** — a tailnet-only HTTP 
 | Variable | Required | Description |
 |---|---|---|
 | `ROSTER_CONTROL_TOKEN` | No (required only to enable the sidecar) | Bearer token the sidecar checks (constant-time) on every authenticated request. **Unset ⇒ the sidecar does not start** — the agent is simply not remotely controllable, which is a safe default; Slack and `tailscale ssh` are unaffected. Per-agent secret: Roster mints it, stores it encrypted, and injects it as a Railway env var. Never reuse a token across agents. |
-| `ROSTER_CONTROL_PORT` | No (defaults to `8765`) | Port the sidecar binds on `127.0.0.1` and is served on over the tailnet (`tailscale serve --tcp`, same number both sides). Only change it if `8765` collides with something else on the agent. Not a secret. |
+| `ROSTER_CONTROL_PORT` | No (defaults to `8765`) | Port the sidecar binds on `127.0.0.1` and is served on over the tailnet (`tailscale serve --http`, same number both sides — plain HTTP, no TLS, no `.ts.net` FQDN required). Only change it if `8765` collides with something else on the agent. Not a secret. |
 
 **Why this is a secret and the model isn't:** `ROSTER_CONTROL_TOKEN` is the *authorization* for changing the model remotely — it belongs in the same bucket as the Slack tokens and LLM keys. The model *value* itself (e.g. `anthropic/claude-opus-4.7`) is non-secret config and lives in `/opt/data/config.yaml`, exactly as described in the LLM-provider note above. The sidecar is just a remote, authenticated write path to that file.
 

@@ -174,9 +174,12 @@ fi
 #     tailscaled, so it is a sibling of the gateway process and survives a
 #     `hermes gateway restart` (which re-execs the gateway in place).
 #   - Binds 127.0.0.1 only; we bridge it onto the tailnet with `tailscale
-#     serve --tcp` (raw L4 forward, same port in and out, no TLS certs needed).
-#     If tailscaled isn't up, the sidecar still runs locally but isn't
-#     reachable from the tailnet — logged, not fatal.
+#     serve --http` (plain HTTP, same port in and out — matches the
+#     sidecar contract's "plain HTTP over the already-encrypted tailnet"
+#     promise so Roster can reach it as `http://<tsHostname>:<port>`
+#     without any TLS-cert / `.ts.net`-FQDN workarounds). If tailscaled
+#     isn't up, the sidecar still runs locally but isn't reachable from
+#     the tailnet — logged, not fatal.
 if [ -n "${ROSTER_CONTROL_TOKEN:-}" ]; then
   CONTROL_PORT="${ROSTER_CONTROL_PORT:-8765}"
 
@@ -196,9 +199,9 @@ if [ -n "${ROSTER_CONTROL_TOKEN:-}" ]; then
     done
 
     if [ "$TAILSCALE_UP" = "1" ]; then
-      log "  Exposing sidecar on the tailnet: tailscale serve --bg --tcp=${CONTROL_PORT}"
+      log "  Exposing sidecar on the tailnet: tailscale serve --bg --http=${CONTROL_PORT}"
       if tailscale --socket="$TS_SOCKET" serve --bg \
-           --tcp="$CONTROL_PORT" "tcp://127.0.0.1:${CONTROL_PORT}"; then
+           --http="$CONTROL_PORT" "http://127.0.0.1:${CONTROL_PORT}"; then
         log "  Control sidecar reachable from the tailnet at http://${TAILNET_HOSTNAME}:${CONTROL_PORT}"
       else
         warn "  'tailscale serve' failed — the sidecar is running on 127.0.0.1 but is"

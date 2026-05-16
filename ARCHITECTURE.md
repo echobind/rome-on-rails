@@ -1,6 +1,6 @@
 # ARCHITECTURE.md — rome-on-rails
 
-## Last updated: 2026-05-14
+## Last updated: 2026-05-15
 
 ---
 
@@ -118,7 +118,7 @@ The sidecar is the minimum surface that closes that gap: a ~90-line FastAPI serv
 | Runtime | The Hermes venv's Python (`/opt/hermes/.venv`) — FastAPI, uvicorn, PyYAML are already there; no new pip dependencies |
 | Endpoints | `GET /healthz` (no auth), `GET /model` and `POST /model` (bearer auth) |
 | Bind address | `127.0.0.1:${ROSTER_CONTROL_PORT}` (default `8765`) — never `0.0.0.0` |
-| Tailnet exposure | `tailscale serve --bg --tcp=<port> tcp://127.0.0.1:<port>` — raw L4 forward, same port in and out, no TLS certs |
+| Tailnet exposure | `tailscale serve --bg --http=<port> http://127.0.0.1:<port>` — plain HTTP, same port in and out, no TLS certs (clients reach it as `http://<tsHostname>:<port>` with no `.ts.net` FQDN or verify-opt-out workaround) |
 | Process user | `hermes` (UID 10000), started via `gosu` from `entrypoint.sh` |
 | Started when | `ROSTER_CONTROL_TOKEN` is set **and** `gosu` is available — otherwise not started at all (fail-closed) |
 | Config primitive | `hermes_cli.config.load_config` / `save_config` — never hand-parses YAML |
@@ -169,9 +169,9 @@ Roster (its own Railway service, on the same tailnet)
   │  Authorization: Bearer <ROSTER_CONTROL_TOKEN>
   │  WireGuard-encrypted tunnel via tailnet mesh
   ▼
-Hermes container's tailscaled  →  `tailscale serve` TCP forward
+Hermes container's tailscaled  →  `tailscale serve --http` forward
   │
-  │  bridges tailnet:<port> → 127.0.0.1:<port>
+  │  bridges tailnet:<port> → 127.0.0.1:<port> as plain HTTP
   ▼
 Roster control sidecar (FastAPI, running as the hermes user)
   │
@@ -326,6 +326,29 @@ This section records significant architecture decisions, when they were made, an
 
 ---
 
+### 2026-05-15 — Switch sidecar tailnet exposure from `tailscale serve --tcp` to `--http`
+
+**Decision:** Expose the Roster control sidecar onto the tailnet with `tailscale serve --bg --http=<port> http://127.0.0.1:<port>`, replacing the original 2026-05-14 choice of `--tcp=<port> tcp://127.0.0.1:<port>`. The user-facing contract is unchanged: Roster still reaches the sidecar at `http://<tsHostname>:<ROSTER_CONTROL_PORT>`.
+
+**Rationale:** `tailscale serve --tcp` is documented as "raw TCP forwarding," and the 2026-05-14 decision read it that way — as the most literal L4 bridge available. In practice, `tailscale serve --tcp=<port>` *terminates TLS at the tailnet edge using the node's MagicDNS certificate*, then forwards the decrypted bytes to the backend. The visible consequence: a client connecting to `http://<tsHostname>:<port>` gets a TLS handshake, not HTTP — and to actually reach the sidecar a client must either use the full `.ts.net` MagicDNS FQDN with TLS verification, or disable cert verification entirely. Both are exactly the friction the contract's §2 ("plain HTTP over the already-encrypted tailnet — no TLS cert wrangling") was written to avoid. Downstream, Roster was carrying a verify-opt-out workaround in its server-side fetch path that we wanted to delete.
+
+`tailscale serve --http=<port>` is the right tool: it exposes the backend as actual HTTP on the tailnet, no TLS termination, no cert provisioning, no MagicDNS-FQDN requirement on the client side. WireGuard still encrypts every tailnet hop end-to-end (the tailnet is private by construction), and `ROSTER_CONTROL_TOKEN` is still the authorization layer — the security posture is unchanged. We are only removing the spurious TLS layer that nothing was relying on.
+
+The 2026-05-14 decision argued against `--http` as "an unnecessary L7 reverse proxy." That argument was wrong in two ways: (1) `--http` is the documented way to expose plain HTTP on the tailnet at a specific port — there is no host/path routing concern at our scale, just a single backend on a single port, which is exactly what `--http=<port> http://127.0.0.1:<port>` does; and (2) the "L7 proxy" framing is misleading — the practical alternative we needed was *not* raw TCP (which gets TLS-wrapped anyway) but plain HTTP, which is what `--http` actually delivers.
+
+**Files changed:**
+
+- `entrypoint.sh` — the `tailscale serve` invocation in the Roster control sidecar block and its surrounding comment.
+- `docs/hermes-control-sidecar-contract.md` — §2 ("Topology") clarified to call out the `--http`-vs-`--tcp` choice; §10 sub-decision #1 rewritten with the corrected rationale and a pointer back to this decision.
+- `ARCHITECTURE.md` — Roster Control Sidecar property table, Network Flow diagram, and the 2026-05-14 sub-decision bullet annotated to point here.
+- `HANDOFF.md` — Risk 12's "bearer token is the whole authorization layer" bullet updated to reflect that the transport is now actually plain HTTP (not TLS-terminated-pretending-to-be-HTTP).
+
+**No contract break:** The user-visible URL (`http://<tsHostname>:<ROSTER_CONTROL_PORT>`) is identical, the bearer-token model is unchanged, the port is unchanged. Roster's client-side workaround for cert verification can be deleted without touching the request shape.
+
+**Validated:** `docker build` succeeds with the updated entrypoint. End-to-end (a real `tailscale up` + a `curl http://<tsHostname>:8765/healthz` from a peer tailnet node) requires a live `TS_AUTHKEY` and is part of the standard local smoke test.
+
+---
+
 ### 2026-05-14 — Add an optional Roster control sidecar for remote model control
 
 **Decision:** Add a third, optional process to the Hermes Service container — a ~90-line FastAPI HTTP service (`roster-control-sidecar.py`) that lets Roster read and change the agent's LLM model over the tailnet. It implements `GET /healthz`, `GET /model`, `POST /model` exactly per the shared contract at `docs/hermes-control-sidecar-contract.md`. It is **off unless `ROSTER_CONTROL_TOKEN` is set**.
@@ -336,7 +359,7 @@ This section records significant architecture decisions, when they were made, an
 
 - **Runs as the `hermes` user (via `gosu`), not root.** The sidecar writes `config.yaml` and spawns `hermes gateway restart` — both operations the gateway, dashboard, and maintainers all perform as `hermes`. A root-run sidecar risks leaving a root-owned `config.yaml` (if `save_config` does atomic temp-file + rename), which then breaks the other writers — the exact foot-gun the README warns maintainers about. Running as `hermes` makes the write indistinguishable from any other writer. *(Consulted a DevOps specialist on this specific question; the privilege-symmetry and least-privilege arguments both pointed the same way.)*
 - **Fail-closed, with no root fallback.** No `ROSTER_CONTROL_TOKEN` ⇒ the sidecar does not start (a half-open control surface is worse than none). If `gosu` is somehow missing from the upstream image ⇒ the sidecar is **disabled with a loud warning**, not started as root — a silent privilege downgrade is a latent incident; a loud failure is debuggable. In every disabled case the Hermes gateway is unaffected.
-- **Tailnet exposure via `tailscale serve --bg --tcp`, same port both sides.** Raw L4 forwarding (`tcp://127.0.0.1:<port>`), so the sidecar is reachable at exactly `http://<tsHostname>:<port>` with no port translation. Chosen over `tailscale serve --http` (an unnecessary L7 proxy) and HTTPS serve (needs cert provisioning; the tailnet already encrypts end-to-end). Verified: raw `--tcp` needs no HTTPS/cert setup.
+- **Tailnet exposure via `tailscale serve --bg --http`, same port both sides.** Plain HTTP forwarding (`http://127.0.0.1:<port>`), so the sidecar is reachable at exactly `http://<tsHostname>:<port>` with no port translation. *Revised 2026-05-15 — this originally used `--tcp`; see the 2026-05-15 decision below for why that was wrong.* HTTPS serve is still rejected (needs cert provisioning; the tailnet already encrypts end-to-end via WireGuard).
 - **Framework: FastAPI + uvicorn**, already in the Hermes venv — zero new pip dependencies. The sidecar runs on the venv's Python so it can `import hermes_cli.config` and reuse `load_config` / `save_config` rather than hand-parsing YAML.
 - **Restart via `hermes gateway restart`** (no flags), spawned detached. Verified against the pinned `v2026.4.16` image by tracing `hermes_cli/gateway.py`: the bare form targets the running foreground gateway (located via `/opt/data/gateway.pid`), not the systemd unit (`--system` is the opt-in for that), and triggers an in-place self-re-exec — so the container does not exit and the sidecar survives.
 
